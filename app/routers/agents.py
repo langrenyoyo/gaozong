@@ -131,7 +131,11 @@ def create_agent(
     try:
         agent = ai_agent_service.create_agent(db, context, payload)
     except ValueError as exc:
-        raise _bad_request(str(exc), "缺少可信商户上下文") from exc
+        # P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R2：区分可信商户缺失与字段校验错误，
+        # 不再把 store_name 校验错误误报为"缺少可信商户上下文"。
+        code = str(exc)
+        message = "缺少可信商户上下文" if code == "MERCHANT_ID_REQUIRED" else code
+        raise _bad_request(code, message) from exc
     return {"success": True, "data": agent, "message": "success"}
 
 

@@ -266,7 +266,6 @@ def test_reply_decision_reports_per_successful_chat_call(monkeypatch):
         "agent_id": "a",
         "agent_name": "a",
         "agent_category": "bound_agent",
-        "system_prompt": None,
         "reply_style": "",
         "business_scope": "",
         "is_active": True,

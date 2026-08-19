@@ -108,13 +108,12 @@ GMP webhook
 - preview：`agents.py`（按 agent_id 服务端 AiAgent ORM 读取，不再接受前端草稿）
 - 三者统一调用 `ai_agent_service.build_agent_config`（apps/agents/services.py），
   字段：agent_id/agent_name/store_name/status/allowed_category_keys/rag_enabled + 门店普通事实字段；
-  不含 system_prompt/prompt/knowledge_base_text/store_phone/store_wechat（四旧字段已退出，携带即 422/4xx 拒绝）
+  **P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R2：system_prompt/prompt/knowledge_base_text/store_phone/store_wechat 已完整退出 AgentConfig，携带即 422 拒绝**
 
 ### Prompt 三层
-1. 固定模板：`reply_decision_service.py`（V2.0 硬编码，店铺名称用 agent_config.store_name，不再由 merchant_name 派生）
+1. 固定模板：`reply_decision_service.py`（V3.1，店铺名称用 agent_config.store_name，不再由 merchant_name 派生）
 2. 运行时约束：known_customer_info（budget/brand/city/salutation/contact_invalid）
-   （Agent 自定义 system_prompt 已退出 LLM 上下文；system_prompt 仅作留资目标等确定性判定的服务端信号）
-3. （历史注释：原"商户 system_prompt config.system_prompt or config.prompt"已随 P0-V3 移除）
+3. （R2：Agent system_prompt 已完全删除——resolve_reply_agent/apply_agent_prompt 不再派生 system_prompt 键，`_sanitize_merchant_system_prompt` 已删，留资目标判定不再依赖 system_prompt（恒 False，模板第二节承载留资引导）；`_direct_llm_auto_send_allowed` 加入价格/金融 CLAIM 确定性阻断覆盖 direct/trusted RAG/retry/post-process）
 
 ### RAG 触发
 - rag_enabled：`reply_decision_service.py:3746-3760`（显式或 allowed_category_keys 非空）

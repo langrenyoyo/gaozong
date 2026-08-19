@@ -98,9 +98,9 @@ class UserProfileResponse(BaseModel):
 class AgentConfig(BaseModel):
     """9000→9100 Agent 配置白名单（唯一构造器产出）。
 
-    P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R1：
+    P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R2：
     - store_name 仅归属 AiAgent（String(255)）；
-    - prompt/knowledge_base_text/store_phone/store_wechat 已完整退出，直接携带即 422 拒绝；
+    - prompt/knowledge_base_text/store_phone/store_wechat/system_prompt 已完整退出，直接携带即 422 拒绝；
     - extra=forbid：前端/调用方不得提交 agent_config 覆盖可信 Agent 数据。
     """
 
@@ -109,8 +109,6 @@ class AgentConfig(BaseModel):
     agent_id: str
     agent_name: str | None = None
     store_name: str | None = None
-    # system_prompt 为兼容字段（不在四旧字段列表）：9100 不注入 LLM 上下文（Agent 自定义 Prompt 已退出）。
-    system_prompt: str | None = None
     status: str | None = None
     allowed_category_keys: list[str] | None = None
     allowed_category_ids: list[str] | None = None
@@ -160,6 +158,14 @@ class CustomerMemory(BaseModel):
 
 
 class ReplySuggestionRequest(BaseModel):
+    """9100 回复建议请求。
+
+    P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R2：顶层未知字段严格拒绝（extra=forbid），
+    防止调用方携带未声明的旧字段/伪造字段被静默忽略。
+    """
+
+    model_config = {"extra": "forbid"}
+
     tenant_id: str
     account_id: int | str
     latest_message: str

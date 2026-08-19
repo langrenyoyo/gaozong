@@ -49,7 +49,7 @@ def _mock_reply(reply_text, intent="general_inquiry", confidence=0.85):
     }
 
 
-_AGENT_CONFIG = {"agent_id": "agent-1", "agent_name": "AI客服", "system_prompt": "", "status": "active"}
+_AGENT_CONFIG = {"agent_id": "agent-1", "agent_name": "AI客服", "status": "active"}
 
 
 def _run_forbidden_app_scenario(scenario: str) -> dict:

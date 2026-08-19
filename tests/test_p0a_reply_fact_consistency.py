@@ -52,7 +52,6 @@ def _mock_reply(reply_text, intent="general_inquiry", confidence=0.85):
 _AGENT_CONFIG = {
     "agent_id": "agent-1",
     "agent_name": "AI客服",
-    "system_prompt": "",
     "status": "active",
 }
 
@@ -373,10 +372,10 @@ def test_p0a_fallback_without_requirement_slots_no_sendback_promise():
 
 
 def test_p0a_phone_goal_retry_produces_contact_guidance_without_sendback_promise(tmp_path, monkeypatch):
-    """首次 LLM 遗漏留资 → 触发 retry → 重试结果含联系方式引导，不含发送/同步/未来主动联系承诺。
+    """R2：Agent system_prompt 已删除，missing_phone_goal retry 不再由 system_prompt 触发。
 
-    等价替代旧失败测试 test_bound_agent_phone_goal_retries_when_llm_omits_phone（该旧测试因
-    retry 阶段名 retry_phone_goal→retry_combined 历史变更 baseline 即 failed，非 P0-A 引入）。
+    本测试改为验证 R2 契约：agent_config 不含 system_prompt 也可正常回复，
+    且无 phone_goal 强化时不触发 retry（单次调用），回复不含发送/未来联系承诺。
     """
     client = _client(tmp_path, monkeypatch)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
@@ -384,20 +383,14 @@ def test_p0a_phone_goal_retry_produces_contact_guidance_without_sendback_promise
 
     def fake_chat(self, messages):
         calls["count"] += 1
-        # 首次遗漏留资引导 → 触发 missing_phone_goal retry
-        if calls["count"] == 1:
-            reply = "可以的，我按您预算30万看530Li让顾问核现车和检测报告。"
-        else:
-            # retry 后含联系方式引导，不含发送/同步/未来主动联系承诺
-            reply = "可以的，我按您预算30万让顾问核现车。您方便留个手机号吗？"
+        reply = "可以的，我按您预算30万看530Li让顾问核现车和检测报告。"
         return _mock_reply(reply, intent="consult_inventory")
 
     monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
-    # agent 启用手机号留资目标（system_prompt 含"手机号"关键词）
+    # R2：agent_config 不再含 system_prompt（Agent 自定义 Prompt 已完整退出）
     phone_agent_config = {
         "agent_id": "agent-phone",
         "agent_name": "留资智能体",
-        "system_prompt": "每次回复都要自然引导客户留下手机号。",
         "status": "active",
     }
     payload = {
@@ -416,16 +409,14 @@ def test_p0a_phone_goal_retry_produces_contact_guidance_without_sendback_promise
         "/douyin/conversations/1/reply-suggestion", json=payload, headers=headers
     )
     assert response.status_code == 200
-    # 触发了 retry（两次 LLM 调用）
-    assert calls["count"] == 2
+    # R2：无 phone_goal 强化 → 单次调用（不触发 missing_phone_goal retry）
+    assert calls["count"] == 1
     text = response.json()["reply_text"]
-    # retry 结果含联系方式引导
-    assert "留个手机号" in text or "联系方式" in text
     # 不含发送/同步/未来主动联系承诺
     for fragment in _FORBIDDEN_FALLBACK_FRAGMENTS:
-        assert fragment not in text, f"retry 回复含禁止话术: {fragment}"
+        assert fragment not in text, f"回复含禁止话术: {fragment}"
     assert "把检测报告" not in text and "把资料" not in text and "把报价" not in text
-    # 无 Hard 违规（retry 成功纠正）
+    # 无 Hard 违规
     risk_flags = response.json().get("risk_flags", [])
     assert "hard_off_platform_detail_promise" not in risk_flags
     assert "hard_unfounded_contact_followup_commitment" not in risk_flags

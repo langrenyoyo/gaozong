@@ -874,9 +874,6 @@ def resolve_reply_agent(
                     "agent_id": config.agent_id or request.agent_id,
                     "agent_name": config.agent_name or config.agent_id or request.agent_id,
                     "agent_category": "bound_agent",
-                    # system_prompt 仅作留资目标等确定性判定的服务端信号（不注入 LLM 上下文，
-                    # Agent 自定义 Prompt 已退出）。
-                    "system_prompt": config.system_prompt or "",
                     # P0-DOUYIN-AI-PROMPT-V3：store_name 仅归属 AiAgent；运行时兜底
                     # trim(store_name) or trim(agent_name) or "未命名门店"（混合版本/异常数据防御）
                     "store_name": (config.store_name or "").strip()
@@ -902,7 +899,6 @@ def resolve_reply_agent(
                 "agent_id": request.agent_id,
                 "agent_name": request.agent_id,
                 "agent_category": "bound_agent",
-                "system_prompt": "",
                 "store_name": "未命名门店",
                 "reply_style": "",
                 "business_scope": "",
@@ -995,8 +991,6 @@ def apply_agent_prompt(merchant_prompt: dict, agent: dict) -> dict:
         "category": agent.get("agent_category"),
         "persona": agent.get("business_scope"),
         "style": agent.get("reply_style"),
-        # system_prompt 仅作留资目标等确定性判定的服务端信号（Agent 自定义 Prompt 已退出 LLM 上下文）。
-        "system_prompt": agent.get("system_prompt") or "",
         "agent_id": agent.get("agent_id"),
         "agent_name": agent.get("agent_name"),
         "store_name": agent.get("store_name") or agent.get("agent_name") or "未命名门店",
@@ -1498,15 +1492,21 @@ def _build_fixed_prompt_template(merchant_prompt: dict) -> str:
     after_hours_reply = merchant_prompt.get("after_hours_reply") or "未配置"
     vehicle_condition_reply = merchant_prompt.get("vehicle_condition_reply") or "未配置"
     appraiser_off_hours_reply = merchant_prompt.get("appraiser_off_hours_reply") or "未配置"
-    # 地址：有值如实回答，空值用占位标记（模板内据此决定回答还是留资）
-    address_line = store_address if store_address.strip() else "（未填写，留资承接）"
+    # P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R2：地址空时不得生成"未填写/未配置"占位作为客户可见文本。
+    # 有值时如实注入商家事实与"地址已填"示例；空值时注入"地址未配置"内部事实 + 留资承接示例（不输出占位）。
+    address_fact = f"地址：{store_address}" if store_address.strip() else "地址：未配置（客户问地址/定位时，不输出'未配置/未填写'，引导留资后由同事发送）"
+    address_example = (
+        f"客户：店铺在哪 → 老板，我们店在{store_address}"
+        if store_address.strip()
+        else "客户：发个定位 → 老板，你留个联系方式，我发你"
+    )
 
     return f"""# 抖音私信 AI 客服提示词 V3.1
 
 ## 一、商家事实
 智能体：{agent_name}
 门店：{store_name}
-地址：{address_line}
+{address_fact}
 营业时间：{business_hours}
 销售城市/品牌：{sales_cities} / {sales_brands}
 收车城市/品牌：{purchase_cities} / {purchase_brands}
@@ -1539,8 +1539,8 @@ VALID 后不重复索要、不主动提"您之前留过联系方式"等模板话
 不发商家自己的电话或微信。contact_state 非 VALID 时回复"这里不太方便直接发，你留个联系方式我+你"类（称呼用 salutation）；VALID（已留联系方式）时不索要联系方式，改承接"我让同事核实后联系您"类，不提"留个联系方式"。
 
 ### 地址/定位（客户问"店铺在哪/发个定位/怎么导航/在哪"）
-地址已填写（{address_line}）：直接简短回答，如"老板，我们店在{address_line}"。
-地址未填写：不输出"未配置/系统没有/档案没填"。contact_state 非 VALID 时改为"老板，你留个联系方式，我发你"；VALID 时不索要联系方式，改承接"老板，我让同事把地址发您"类，不提"留个联系方式"。
+地址已填写：直接简短回答，如"老板，我们店在{store_address}"。
+地址未填写：不输出"未配置/系统没有/档案没填/未填写"等占位文本。contact_state 非 VALID 时改为"老板，你留个联系方式，我发你"；VALID 时不索要联系方式，改承接"老板，我让同事把地址发您"类，不提"留个联系方式"。
 注意：不能承诺"已经给你发定位"（平台技术上无法发地图定位），"我发你"作为留资承接话术可用。
 
 ### 金融（客户问"分期/贷款/首付/月供/利率/按揭/征信/资质/审批/免息/零首付/车贷"等）
@@ -1584,8 +1584,7 @@ manual_required=false 是默认值。仅以下设 true：回复含编造库存/�
 ### 示例
 客户：如何联系 → 老板，这里不太方便直接发，你留个联系方式我+你
 客户：有没有电车 → 有的老板，你想了解混动还是纯电
-客户：店铺在哪（地址已填）→ 老板，我们店在{address_line}
-客户：发个定位（地址未填）→ 老板，你留个联系方式，我发你
+{address_example}
 客户：可以分期吗 → 老板这个不太方便在这里说，你留个联系方式我+你
 客户：可以零首付吗 → 老板这个不太方便在这里说，你留个联系方式我+你
 客户：直播间那台3系多少钱 → 老板，这里不方便展开，留个联系方式我+你"""
@@ -1905,19 +1904,6 @@ def _combined_retry_safety_fallback(
         fallback_to_human=False,
     )
 
-
-def _sanitize_merchant_system_prompt(value: object) -> str:
-    text = str(value or "")
-    replacements = {
-        "自然引导客户留资": "引导客户在当前对话内补充预算、年份、里程或配置偏好",
-        "自然引导留资": "引导客户在当前对话内补充预算、年份、里程或配置偏好",
-        "引导客户留下联系方式": "引导客户继续在当前对话内补充需求",
-        "优先确认车型、预算和联系方式": "优先确认车型、预算和配置偏好",
-        "留下联系方式": "继续在当前对话内补充需求",
-    }
-    for source, target in replacements.items():
-        text = text.replace(source, target)
-    return text
 
 
 def _is_audi_a6(message: str) -> bool:
@@ -2578,14 +2564,14 @@ def _extract_customer_requirements(
 
 
 def _agent_requires_phone_lead_capture(agent: dict | None) -> bool:
-    # agent 参数可为 agent dict 或 apply_agent_prompt 合并后的 merchant_prompt dict
-    # （两者都含 agent_category/system_prompt/business_scope/reply_style 字段，同源）。
+    # P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R2：Agent system_prompt 已完全删除，
+    # 留资目标判定不再依赖 system_prompt（business_scope/reply_style 当前为空 → 恒 False，
+    # 固定模板第二节仍承载留资引导；后续如需独立留资目标配置需另立字段，本批不引入）。
     if not isinstance(agent, dict):
         return False
     if agent.get("agent_category") != "bound_agent":
         return False
     prompt_parts = [
-        agent.get("system_prompt"),
         agent.get("business_scope"),
         agent.get("reply_style"),
     ]
@@ -3329,6 +3315,11 @@ def _direct_llm_auto_send_allowed(
     if decision.get("manual_required") is True:
         return False
     if not str(decision.get("reply_text") or "").strip():
+        return False
+    # P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R2：价格/金融事实断言确定性自动发送阻断。
+    # 覆盖 direct、trusted RAG（rag_used=True 不再直接放行）、retry、post-process 后的最终资格计算——
+    # 本函数是候选资格统一收敛点，回复报出具体价格数字或金融事实/审批承诺即禁止自动发送。
+    if _reply_has_price_or_finance_claim(str(decision.get("reply_text") or "")):
         return False
     risk_flags = list(decision.get("risk_flags") or [])
     if risk_flags and decision.get("manual_required") is not False:

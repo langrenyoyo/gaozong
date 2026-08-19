@@ -58,7 +58,7 @@ Router: agents.py:194-315 preview_agent
   → 服务端 list_agent_category_keys 读知识绑定
   → 组装 agent_config dict（唯一白名单构造器 build_agent_config，来源：可信 AiAgent ORM）
     字段：agent_id/agent_name/store_name/status/allowed_category_keys/rag_enabled
-          + 门店普通事实字段；不含 system_prompt/prompt/knowledge_base_text/store_phone/store_wechat
+          + 门店普通事实字段；不含 system_prompt/prompt/knowledge_base_text/store_phone/store_wechat（R2 完整退出）
   → 补 direct_llm_policy + forbidden_words
   → get_xg_douyin_ai_cs_client().suggest_reply(
         context, conversation_id="agent-preview", request=request_payload)

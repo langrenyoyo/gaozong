@@ -688,8 +688,6 @@ def test_reply_suggestion_uses_injected_agent_config_without_fallback_warning(tm
             "agent_config": {
                 "agent_id": "agent_from_9000",
                 "agent_name": "真实小高客服",
-                "system_prompt": "按真实库存回复，禁止自动发送。",
-                "knowledge_base_text": "A6 暂无现车，可推荐同级车型。",
                 "status": "active",
             },
         },
@@ -720,8 +718,6 @@ def test_reply_suggestion_accepts_account_open_id_string_from_proxy(tmp_path, mo
             "agent_config": {
                 "agent_id": "dev-merchant-p5-agent",
                 "agent_name": "P5验收智能体",
-                "system_prompt": "只根据知识库回答，禁止自动发送。",
-                "knowledge_base_text": "",
                 "status": "active",
                 "allowed_category_keys": ["base", "p5_acceptance_test"],
             },
@@ -752,8 +748,6 @@ def test_reply_suggestion_body_endpoint_accepts_douyin_conversation_short_id(tmp
             "agent_config": {
                 "agent_id": "dev-merchant-p5-agent",
                 "agent_name": "P5验收智能体",
-                "system_prompt": "只根据知识库回答，禁止自动发送。",
-                "knowledge_base_text": "",
                 "status": "active",
                 "allowed_category_keys": ["base"],
             },

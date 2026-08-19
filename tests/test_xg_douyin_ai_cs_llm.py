@@ -1161,7 +1161,6 @@ def test_bound_agent_prompt_can_guide_phone_lead_capture(tmp_path, monkeypatch):
             "agent_config": {
                 "agent_id": "agent-phone",
                 "agent_name": "留资智能体",
-                "system_prompt": "每次回复都要自然引导客户留下联系方式，检测报告、报价和车源资料通过手机发送；绝不说加绿泡泡。",
                 "status": "active",
             },
             "latest_message": "这俩我都关注。要是有现车，能先把检测报告和最低价发我看看吗？",
@@ -1179,12 +1178,21 @@ def test_bound_agent_prompt_can_guide_phone_lead_capture(tmp_path, monkeypatch):
     assert "微信" not in data["reply_text"]
     assert "预算范围是多少" not in data["reply_text"]
     assert "想看什么车型" not in data["reply_text"]
-    assert "引导客户留下联系方式" in seen["system_prompt"]
+    # R2：Agent system_prompt 已完全删除，LLM system prompt 仅含固定模板（引导留资由模板第二节承载），
+    # 不再注入 Agent 自定义 system_prompt 内容（"绝不说加绿泡泡"原文不应出现）。
+    assert "引导客户留下联系方式" in seen["system_prompt"]  # 固定模板第二节留资目标
+    assert "绝不说加绿泡泡" not in seen["system_prompt"]      # Agent 自定义 system_prompt 已退出
     assert "Direct LLM 不允许主动索要绿泡泡、☎️" not in seen["system_prompt"]
-    assert seen["payload"]["agent"]["lead_capture_goal"]["enabled"] is True
+    # R2：Agent system_prompt 已删除，lead_capture_goal 不再由 system_prompt 触发（恒 False）；
+    # 留资引导由固定模板第二节承载。
+    assert seen["payload"]["agent"]["lead_capture_goal"]["enabled"] is False
 
 
 def test_bound_agent_phone_goal_retries_when_llm_omits_phone(tmp_path, monkeypatch):
+    """R2：Agent system_prompt 已删除，phone_goal（lead_capture_goal）不再由 system_prompt 触发。
+
+    留资引导由固定模板第二节承载；不再触发 retry_phone_goal 强化索要电话。
+    """
     client = _client(tmp_path, monkeypatch)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
     calls = {"count": 0}
@@ -1201,11 +1209,7 @@ def test_bound_agent_phone_goal_retries_when_llm_omits_phone(tmp_path, monkeypat
 
     def fake_chat(self, messages):
         calls["count"] += 1
-        reply = (
-            "收到，我让顾问按30万左右、20/21款530Li去核现车、检测报告和报价。"
-            if calls["count"] == 1
-            else "收到，我让顾问按30万左右、20/21款530Li去核现车、检测报告和报价。您方便留个手机号吗？"
-        )
+        reply = "收到，我让顾问按30万左右、20/21款530Li去核现车、检测报告和报价。"
         return {
             "reply_text": json.dumps(
                 {
@@ -1223,7 +1227,7 @@ def test_bound_agent_phone_goal_retries_when_llm_omits_phone(tmp_path, monkeypat
             ),
             "model": "mock-chat",
             "elapsed_ms": 1,
-            "usage": {"total_tokens": 19 if calls["count"] == 1 else 7},
+            "usage": {"total_tokens": 19},
         }
 
     monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
@@ -1238,7 +1242,6 @@ def test_bound_agent_phone_goal_retries_when_llm_omits_phone(tmp_path, monkeypat
             "agent_config": {
                 "agent_id": "agent-phone",
                 "agent_name": "留资智能体",
-                "system_prompt": "唯一 KPI 是引导用户留下手机号，资料需要通过手机号发送。",
                 "status": "active",
             },
             "latest_message": "行，老板那你赶紧帮我查查，一定要有第三方检测、没事故的。",
@@ -1249,15 +1252,10 @@ def test_bound_agent_phone_goal_retries_when_llm_omits_phone(tmp_path, monkeypat
     )
 
     assert response.status_code == 200
-    assert calls["count"] == 2
+    # R2：无 phone_goal 强化 → 单次调用（不触发 retry_phone_goal）
+    assert calls["count"] == 1
     text = response.json()["reply_text"]
-    assert "联系方式" in text
     assert "检测报告" in text
-    assert [item["tokens"] for item in reports] == [19, 7]
-    assert [item["llm_call_stage"] for item in reports] == [
-        "primary",
-        "retry_phone_goal",
-    ]
 
 
 def test_bound_agent_phone_goal_fallback_uses_phone_when_llm_fails(tmp_path, monkeypatch):
@@ -1281,7 +1279,6 @@ def test_bound_agent_phone_goal_fallback_uses_phone_when_llm_fails(tmp_path, mon
             "agent_config": {
                 "agent_id": "agent-phone",
                 "agent_name": "留资智能体",
-                "system_prompt": "每次回复都要自然引导客户留手机号，检测报告和报价通过手机发送。",
                 "status": "active",
             },
             "latest_message": "你们店里现在有符合的现车嘛",
@@ -1293,10 +1290,10 @@ def test_bound_agent_phone_goal_fallback_uses_phone_when_llm_fails(tmp_path, mon
 
     assert response.status_code == 200
     text = response.json()["reply_text"]
-    assert "联系方式" in text
-    assert "检测报告" in text or "报价" in text
+    # R2：无 phone_goal 强化，LLM 失败走普通承接 fallback（不强制索要联系方式）
     assert "AI 模型调用失败" not in text
     assert "您可以先说下预算" not in text
+    assert "收到" in text
 
 
 def test_reply_suggestion_no_rag_llm_not_configured_warns_and_falls_back(tmp_path, monkeypatch):
@@ -2435,7 +2432,6 @@ def test_bound_agent_direct_llm_enabled_policy_is_not_treated_as_config_fallback
             "agent_config": {
                 "agent_id": "agent-1",
                 "agent_name": "测试智能体",
-                "system_prompt": "自然回答客户问题，并引导客户留下手机号。",
                 "status": "active",
                 "rag_enabled": False,
             },

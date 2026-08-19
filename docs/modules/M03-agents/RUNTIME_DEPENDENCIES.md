@@ -22,13 +22,13 @@
 |---|---|
 | 类型 | Contract / Payload（X） |
 | 组装方 | 9000（M03 路由组装 agent_config dict） |
-| 组装点 | **3 处**（字段结构一致，来源不同）：① `agents.py:241-262`（preview，前端草稿）② `douyin_ai_cs_proxy.py:322-343`（会话预览，DB）③ `ai_auto_reply_dry_run_service.py:315-336`（auto-reply，DB binding.agent） |
-| 9100 消费 | `resolve_reply_agent`（`reply_decision_service.py:822-877`）→ `_merge_agent_into_prompt`（`:945-969`）→ `build_llm_messages`（`:1827`） |
-| Schema | `apps/xg_douyin_ai_cs/schemas.py:98-119` AgentConfig |
-| 字段 | system_prompt/prompt/knowledge_base_text/status/allowed_category_keys/rag_enabled + 11 商家变量 |
-| 仅前端展示 | **无**（全部进入 9100 并被消费） |
-| 重复组装 | **是**（3 处近乎相同的组装逻辑，解耦候选） |
-| 正式 Schema | 9100 AgentConfig Pydantic model（非独立 DTO 文档） |
+| 组装点 | **3 处统一走唯一构造器 `ai_agent_service.build_agent_config`**（P0-V3/R2，字段结构一致）：① `agents.py`（preview，服务端 AiAgent ORM）② `douyin_ai_cs_proxy.py`（会话预览，DB）③ `ai_auto_reply_dry_run_service.py`（auto-reply，DB binding.agent） |
+| 9100 消费 | `resolve_reply_agent`（`reply_decision_service.py`）→ `apply_agent_prompt` → `build_llm_messages` |
+| Schema | `apps/xg_douyin_ai_cs/schemas.py` AgentConfig（**extra=forbid**） |
+| 字段 | agent_id/agent_name/store_name/status/allowed_category_keys/rag_enabled + 门店普通事实字段；**不含 system_prompt/prompt/knowledge_base_text/store_phone/store_wechat（R2 已完整退出，携带即 422）** |
+| 仅前端展示 | **无**（构造器从服务端可信 ORM 读取，调用方不得覆盖） |
+| 重复组装 | **否**（三处统一调用同一构造器） |
+| 正式 Schema | 9100 AgentConfig Pydantic model（extra=forbid） |
 
 ## M03 → 知识库 / RAG 实际依赖
 
@@ -50,16 +50,15 @@
 ## Prompt 层级真相
 
 ```
-最终 system prompt 权威组装点：9100 build_llm_messages（reply_decision_service.py:1827）
+最终 system prompt 权威组装点：9100 build_llm_messages（reply_decision_service.py）
 
   system_parts = [
-    _build_fixed_prompt_template(merchant_prompt),     # 固定模板 V2.0（硬编码 12 节）
-    _sanitize_merchant_system_prompt(merchant_prompt),   # 商户 system_prompt（清洗后）
-    运行时约束追加（留资目标/违禁词/Decision）
+    _build_fixed_prompt_template(merchant_prompt),     # 固定模板 V3.1（6 节）
+    运行时约束追加（留资目标/违禁词/Decision/知识降级/历史信任/联系方式状态）
   ]
 
-不存在多套历史 prompt 路径（grep _SYSTEM_PREFIX/system_prefix 零命中）
-唯一权威路径：_build_fixed_prompt_template（首部）+ 商户 system_prompt（次位）+ 约束追加
+R2：Agent system_prompt 已完全删除（_sanitize_merchant_system_prompt 已移除，不再有商户 system_prompt 次位）。
+唯一权威路径：_build_fixed_prompt_template（V3.1 首部）+ 动态约束追加
 ```
 
 ## 三个 AI 场景对比

@@ -45,7 +45,6 @@ def _mock_reply(reply_text, intent="general_inquiry", confidence=0.85):
 _AGENT_CONFIG = {
     "agent_id": "agent-1",
     "agent_name": "AI客服",
-    "system_prompt": "",
     "status": "active",
 }
 
@@ -101,7 +100,10 @@ def test_legacy_normal_reply_features(tmp_path, monkeypatch):
 
 
 def test_legacy_missing_phone_goal_retry_features(tmp_path, monkeypatch):
-    """missing-phone retry 特征：首次遗漏留资 → retry → llm 调用 2 次。"""
+    """R2：Agent system_prompt 已删除，missing-phone retry（phone_goal）不再触发。
+
+    留资引导由固定模板第二节承载；不再因 system_prompt 强化索要电话而 retry。
+    """
     client = _client(tmp_path, monkeypatch)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
     calls = {"count": 0}
@@ -109,15 +111,12 @@ def test_legacy_missing_phone_goal_retry_features(tmp_path, monkeypatch):
     phone_agent = {
         "agent_id": "agent-phone",
         "agent_name": "留资智能体",
-        "system_prompt": "每次回复都要自然引导客户留下手机号。",
         "status": "active",
     }
 
     def fake_chat(self, messages):
         calls["count"] += 1
-        if calls["count"] == 1:
-            return _mock_reply("可以的，我按您预算让顾问核现车。")
-        return _mock_reply("可以的，我按您预算让顾问核现车。您方便留个手机号吗？", intent="consult_inventory")
+        return _mock_reply("可以的，我按您预算让顾问核现车。")
 
     monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
     response = _post(
@@ -127,9 +126,9 @@ def test_legacy_missing_phone_goal_retry_features(tmp_path, monkeypatch):
     )
     assert response.status_code == 200
     data = response.json()
-    # retry 触发 → 2 次 LLM
-    assert calls["count"] == 2
-    assert "手机号" in data["reply_text"] or "联系方式" in data["reply_text"]
+    # R2：无 phone_goal 强化 → 单次调用（不触发 missing_phone_goal retry）
+    assert calls["count"] == 1
+    assert "可以的" in data["reply_text"]
 
 
 def test_legacy_hard_violation_features(tmp_path, monkeypatch):

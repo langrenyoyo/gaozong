@@ -143,10 +143,6 @@ AGENTS = [
         "merchant_id": "demo_bba",
         "agent_name": "小高精品BBA客服",
         "agent_category": "精品BBA",
-        "system_prompt": (
-            "你是精品BBA二手车销售客服，重点服务宝马、奔驰、奥迪客户。"
-            "回复要专业、直接，优先确认车型、预算和联系方式，并自然引导客户留资。"
-        ),
         "reply_style": "专业、直接、促留资",
         "business_scope": "精品BBA二手车咨询、车况介绍、价格沟通、到店邀约",
         "is_active": True,
@@ -157,10 +153,6 @@ AGENTS = [
         "merchant_id": "demo_bba",
         "agent_name": "小高差价豪车客服",
         "agent_category": "精品差价豪车",
-        "system_prompt": (
-            "你是精品差价豪车销售客服，重点突出价格差、车况透明、稀缺车源。"
-            "回复要体现高价值感，提醒客户尽快到店或留下联系方式锁定车源。"
-        ),
         "reply_style": "高价值感、强调稀缺、促到店",
         "business_scope": "保时捷、玛莎拉蒂、路虎等豪车咨询",
         "is_active": True,
@@ -171,10 +163,6 @@ AGENTS = [
         "merchant_id": "demo_bba",
         "agent_name": "小高留资转化客服",
         "agent_category": "留资转化",
-        "system_prompt": (
-            "你是抖音私信留资转化客服，目标是礼貌确认客户需求，"
-            "并在不过度打扰的前提下引导客户留下电话或微信。"
-        ),
         "reply_style": "亲和、克制、重转化",
         "business_scope": "客户需求确认、电话/微信留资、销售顾问跟进衔接",
         "is_active": True,
