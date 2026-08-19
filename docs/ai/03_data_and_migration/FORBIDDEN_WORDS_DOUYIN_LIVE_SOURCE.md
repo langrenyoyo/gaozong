@@ -170,6 +170,8 @@
 
 **含"最"（PDF-A + PDF-B 类型三 + 通用1）**
 
+> 注：单字符"最"（2026-08-19 迁移决策：**不入库**，`len(strip(word))==1` 规则排除），多字符"最佳/最好/最大"等正常入库。
+
 | word | severity |
 |---|---|
 | 最 | medium |
@@ -527,7 +529,7 @@
 | 报价 | high | PDF-B 违规售卖 |
 | 优惠 | medium | PDF-B 违规售卖 |
 
-> 注：单字"V"匹配面宽，建议迁移时评估误伤（如"VIP/SUV"等含 V 词），必要时启用词边界或改词条为"加V/主播V"。
+> 注：单字"V"匹配面宽（如"VIP/SUV"等含 V 词），**2026-08-19 迁移决策：单字符词条"V"不入库**（`len(strip(word))==1` 规则排除），避免误伤。`qq` 与 `QQ` 按 casefold 视为重复，仅保留 `qq` 一个规范化词条。
 
 ### 4.8 迷信用语（→ `superstition_words`）
 
@@ -600,22 +602,28 @@
 | IP形象 | medium | PDF-B 3.2 |
 | 公众人物形象 | medium | PDF-B 3.2 |
 
-## 5. 迁移实现要点
+## 5. 迁移实现要点（2026-08-19 已实施）
 
-1. **幂等**：`(library_id, word)` 唯一，迁移脚本需 `WHERE NOT EXISTS` 或 `ON CONFLICT` 防重。
-2. **词库幂等**：新 7 个 library_key 按 `forbidden_word_libraries` 现有 seed 模式（`WHERE NOT EXISTS`）插入。
-3. **safe_word 一律 NULL（已取消）**：本词库所有词条 `safe_word` 留空，不做任何替换；空值不影响词条进入 LLM 检查与检测（G1-DELTA 后 `_load_active_words` 不再过滤 `safe_word`）。
-4. **单字/宽匹配评估**：单字"改"、"V"、"最"等匹配面宽，迁移时评估是否启用词边界/组合词条，避免误伤（如"扣666"替代裸"666"）。
-5. **LLM 提示词联动**：`load_forbidden_words_for_llm` 会注入全局活跃词供 LLM 规避（禁止语义），新词条入库后 LLM 侧自动生效，无需额外改造。
-6. **命中日志**：新词条命中自动写 `forbidden_word_hit_logs`（检测/审计路径）或 `manual_required=forbidden_word_hit`（LLM 生成后检查路径），可在运营后台观测命中分布，反向校验词库质量。
-7. **作用范围差异（G1-DELTA 冻结）**：LLM 路径（禁止+重生成 1 次+仍命中转人工）覆盖抖音 AI 客服自动回复；微信派单/通知/反馈完全豁免抖音违禁词；抖音人工私信原文发送；抖音自动回访话术发送前检测命中阻断；回访模板命中 400 拒绝保存。
+**已落地迁移**：SQLite `migrations/versions/0047_forbidden_word_seed.sql` + PostgreSQL Alembic `migrations/postgres/auto_wechat/versions/0037_forbidden_word_seed.py`（down_revision=0036）。
+
+1. **幂等**：`(library_id, word)` 唯一；SQLite 用 `WHERE NOT EXISTS`，PG 用 `ON CONFLICT DO NOTHING` 防重。
+2. **词库幂等**：10 个 library_key（3 现有 + 7 新增）按 `WHERE NOT EXISTS` 插入，缺失才新增，不覆盖已有词库配置（scope=global）。
+3. **safe_word 一律 NULL（已取消）**：本词库所有词条 `safe_word` 写入 SQL NULL，不做任何替换；空值不影响词条进入 LLM 检查与检测（G1-DELTA 后 `_load_active_words` 不再过滤 `safe_word`）。
+4. **单字/宽匹配评估（已执行）**：**单字符词条全部不入库**——含"最"（extreme_ad_words）与"V"（contact_guidance_words）均被排除（`len(strip(word))==1` 规则）；"改"不在清单中；"666"为 3 字符词条正常入库（`扣666` 组合需依赖命中日志评估）。
+5. **qq/QQ 去重（已执行）**：`qq` 与 `QQ` 按 casefold 视为重复，仅保留 1 个规范化词条 `qq`（contact_guidance_words）。
+6. **最终写入 403 条**（原始 406 − 单字符"最""V"2 条 − qq/QQ 去重 1 条）。分布：used_car_sales_base=22、finance_compliance=21、vehicle_condition_risk=9、extreme_ad_words=171、state_sensitive_words=42、inducement_fraud_words=62、contact_guidance_words=26、superstition_words=18、incivility_words=22、ip_event_words=10。
+7. **新词条 enabled=true；不覆盖已有词条运营状态**（迁移只插入缺失词条，不 UPDATE 已有 enabled/severity）。
+8. **LLM 提示词联动**：`load_forbidden_words_for_llm` 会注入全局活跃词供 LLM 规避（禁止语义），新词条入库后 LLM 侧自动生效，无需额外改造。
+9. **命中日志**：新词条命中自动写 `forbidden_word_hit_logs`（检测/审计路径）或 `manual_required=forbidden_word_hit`（LLM 生成后检查路径），可在运营后台观测命中分布，反向校验词库质量。
+10. **作用范围差异（G1-DELTA 冻结）**：LLM 路径（禁止+重生成 1 次+仍命中转人工）覆盖抖音 AI 客服自动回复；微信派单/通知/反馈完全豁免抖音违禁词；抖音人工私信原文发送；抖音自动回访话术发送前检测命中阻断；回访模板命中 400 拒绝保存。
+11. **PG downgrade 策略**：downgrade 0037→0036 **不删除词条**，只回退版本标记（无数据变更）；再次 upgrade 仍幂等。
 
 ## 6. 后续动作
 
-- [ ] 编写数据库迁移（基于本清单，`safe_word` 全部留空，建议在 `migrations/` 下新增版本）
+- [x] **编写数据库迁移（已完成）**：SQLite `0047_forbidden_word_seed.sql` + PG Alembic `0037_forbidden_word_seed.py`，403 条，safe_word 全 NULL，幂等。
 - [ ] 迁移后抽样测试检测效果（可复用 `tests/test_forbidden_word_service.py` / `tests/test_forbidden_word_policy.py` 模式）与 LLM 生成后检查命中转人工/重生成行为
 - [ ] 观察 `forbidden_word_hit_logs` / `manual_required=forbidden_word_hit` 命中数据，迭代词库
-- [ ] 单字/宽匹配词（改/V/最/666 等）上线后按命中日志评估是否收窄
+- [ ] 单字/宽匹配词（改/V/最/666 等）上线后按命中日志评估是否收窄（V/最 已排除不入库；666 保留待观测）
 
 ---
 
