@@ -163,7 +163,8 @@ def _make_release_dir(base: Path, names=("release-aaa.env", "release-bbb.env"), 
     }
     for name in names:
         (rel / name).write_text(
-            "\n".join(f"{k}={v}" for k, v in imgs.items()) + "\n",
+            "# SOURCE_SHA=" + "a" * 40 + "\n"
+            + "\n".join(f"{k}={v}" for k, v in imgs.items()) + "\n",
             encoding="utf-8",
         )
     return rel
@@ -332,6 +333,50 @@ def test_r7_migration_diff_blocks(monkeypatch, scratch, capsys):
     rc = mod.cmd_deploy(["--service", "api", "--prod-tree", str(prod), "--release-dir", str(rel)])
     assert rc != 0
     assert "MANUAL_DB_RELEASE_GATE_REQUIRED" in capsys.readouterr().err
+
+
+def test_r7b_migration_gate_uses_current_release_source_sha(monkeypatch, scratch):
+    """迁移检测必须相对当前生产 release，而不是 origin/master。"""
+    rel = _make_release_dir(scratch, names=("release-current.env",))
+    source_sha = "b" * 40
+    (rel / "release-current.env").write_text(
+        f"# SOURCE_SHA={source_sha}\n"
+        "AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:release-old\n"
+        "XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:old\n"
+        "AUTO_WECHAT_FRONTEND_IMAGE=xg-ai-system-frontend:release-old\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        assert kwargs.get("shell", False) is False
+        calls.append(list(argv))
+        if argv[0] != "git" or argv[1] != "diff":
+            raise AssertionError(f"unexpected argv: {argv}")
+        # Simulate the production state: origin/master == HEAD, while the
+        # current release source is an older commit containing migration diff.
+        if argv[-1] == f"{source_sha}..HEAD":
+            return FakeProc(stdout="migrations/versions/0047_forbidden_word_seed.sql\n")
+        return FakeProc(stdout="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    blocked, reason = mod._db_migration_gate(rel)
+    assert blocked is True
+    assert "MANUAL_DB_RELEASE_GATE_REQUIRED" in reason
+    assert ["git", "diff", "--name-only", f"{source_sha}..HEAD"] in calls
+
+
+def test_r7c_missing_release_source_sha_fails_closed(scratch):
+    """没有可证明的生产源码基线时，不得把迁移变化判成 NO。"""
+    rel = _make_release_dir(scratch, names=("release-current.env",))
+    (rel / "release-current.env").write_text(
+        "AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:release-old\n",
+        encoding="utf-8",
+    )
+    blocked, reason = mod._db_migration_gate(rel)
+    assert blocked is True
+    assert "DB_MIGRATION_UNKNOWN" in reason
+    assert "SOURCE_SHA" in reason
 
 
 # ---------------------------------------------------------------------------
@@ -1097,6 +1142,7 @@ def test_r37_composite_identity_inherits_running(monkeypatch, scratch, capsys):
         "XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:93094f0abcdef1234567890abcdef1234567890\n"
         "AUTO_WECHAT_FRONTEND_IMAGE=\n")
     (rel / "prod1.env").write_text(
+        "# SOURCE_SHA=" + "a" * 40 + "\n"
         "AUTO_WECHAT_API_IMAGE=\nXG_DOUYIN_AI_CS_IMAGE=\n"
         "AUTO_WECHAT_FRONTEND_IMAGE=xg-ai-system-frontend:frontend-8968c8fe-prod1\n")
     prod = _make_prod_tree(scratch)

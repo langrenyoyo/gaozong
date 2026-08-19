@@ -102,6 +102,7 @@ DB_MIGRATION_PATHS = (
 )
 
 MUTABLE_LATEST_RE = re.compile(r":latest$")
+SOURCE_SHA_RE = re.compile(r"^\s*#?\s*SOURCE_SHA\s*=\s*([0-9a-fA-F]{7,40})\s*$")
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +159,40 @@ def _render_command_preview(cmd: list[str]) -> str:
     indent = " " * 2
     lines = [f"{indent}{tok}" for tok in cmd]
     return "\n".join(lines)
+
+
+def _release_source_sha(release_dir: Path) -> tuple[str | None, str]:
+    """读取当前生产 release identity 的源码基线。
+
+    release identity 将 SOURCE_SHA 写在注释中；该值是生产迁移检测的
+    基线，不能用已经同步后的 origin/master 代替。
+    """
+    if not release_dir.is_dir():
+        return None, f"release identity 目录不存在: {release_dir}"
+    records = sorted(release_dir.glob("*.env"))
+    if not records:
+        return None, f"release identity 目录为空: {release_dir}"
+    latest = records[-1]
+    try:
+        lines = latest.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        return None, f"无法读取 release identity {latest}: {exc}"
+    for line in lines:
+        match = SOURCE_SHA_RE.match(line)
+        if match:
+            return match.group(1), ""
+    return None, f"当前 release identity 缺少有效 SOURCE_SHA: {latest.name}"
+
+
+def _migration_changes_since_release(release_dir: Path) -> tuple[str | None, list[str], str]:
+    """返回当前生产 release 之后的迁移文件变化；无法确定时返回错误。"""
+    source_sha, source_err = _release_source_sha(release_dir)
+    if not source_sha:
+        return None, [], source_err
+    diff = _git(["diff", "--name-only", f"{source_sha}..HEAD"], check=False)
+    if diff.returncode != 0:
+        return source_sha, [], f"无法比较 {source_sha}..HEAD: {diff.stderr.strip()[:300]}"
+    return source_sha, diff.stdout.splitlines(), ""
 
 
 # ---------------------------------------------------------------------------
@@ -220,11 +255,15 @@ def cmd_inspect(argv: list[str]) -> int:
     runtime = prod_tree / RUNTIME_ENV_REL
     print(f"RUNTIME_ENV_FILE      = {runtime}（{'exists' if runtime.is_file() else 'missing'}）")
 
-    # DB migration 变化（相对 origin/master 只读 diff --stat）
-    diff = _git(["diff", "--name-only", "HEAD..origin/master"], check=False)
-    changed = diff.stdout.splitlines() if diff.returncode == 0 else []
-    mig = [p for p in changed if any(p.startswith(prefix) or p == prefix.rstrip("/") for prefix in DB_MIGRATION_PATHS)]
-    print(f"DB_MIGRATION_CHANGE   = {'YES' if mig else 'NO'}")
+    # DB migration 变化：相对当前生产 release identity 的 SOURCE_SHA，不能相对 origin/master。
+    source_sha, changed, migration_err = _migration_changes_since_release(rel_dir)
+    if migration_err:
+        print("DB_MIGRATION_CHANGE   = UNKNOWN")
+        print(f"DB_MIGRATION_REASON   = {migration_err}")
+    else:
+        mig = [p for p in changed if any(p.startswith(prefix) or p == prefix.rstrip("/") for prefix in DB_MIGRATION_PATHS)]
+        print(f"DB_MIGRATION_BASELINE = {source_sha}")
+        print(f"DB_MIGRATION_CHANGE   = {'YES' if mig else 'NO'}")
     return 0
 
 
@@ -279,19 +318,19 @@ def _git_gate() -> str | None:
 # ---------------------------------------------------------------------------
 # DB migration gate（deploy 前置，最高优先级）
 # ---------------------------------------------------------------------------
-def _db_migration_gate() -> tuple[bool, str]:
-    """检测本次 HEAD 相对 origin/master 是否含 DB migration 变化。
+def _db_migration_gate(release_dir: Path | None = None) -> tuple[bool, str]:
+    """检测本次 HEAD 相对当前生产 release 是否含 DB migration 变化。
 
     Returns (blocked, message)。blocked=True → DEPLOY BLOCKED MANUAL_DB_RELEASE_GATE_REQUIRED。
     """
-    diff = _git(["diff", "--name-only", "origin/master..HEAD"], check=False)
-    if diff.returncode != 0:
-        # 无法对比（如无 origin/master）：保守 BLOCK
-        return True, "DB_MIGRATION_UNKNOWN: 无法对比 origin/master..HEAD，保守阻断"
-    changed = diff.stdout.splitlines()
+    source_sha, changed, migration_err = _migration_changes_since_release(
+        release_dir or RELEASE_IDENTITY_DIR
+    )
+    if migration_err:
+        return True, f"DB_MIGRATION_UNKNOWN: {migration_err}，保守阻断"
     mig = [p for p in changed if any(p.startswith(prefix) or p == prefix.rstrip("/") for prefix in DB_MIGRATION_PATHS)]
     if mig:
-        return True, f"DB_MIGRATION_DETECTED: 本次发布涉及迁移文件 {mig[:5]} → MANUAL_DB_RELEASE_GATE_REQUIRED（禁止自动 alembic，无 --force/--skip-db 逃生参数）"
+        return True, f"DB_MIGRATION_DETECTED: {source_sha}..HEAD 涉及迁移文件 {mig[:5]} → MANUAL_DB_RELEASE_GATE_REQUIRED（禁止自动 alembic，无 --force/--skip-db 逃生参数）"
     return False, ""
 
 
@@ -813,7 +852,7 @@ def cmd_deploy(argv: list[str]) -> int:
         return 1
 
     # ---- DB migration gate（最高优先级） ----
-    blocked, reason = _db_migration_gate()
+    blocked, reason = _db_migration_gate(Path(args.release_dir))
     if blocked:
         _err(reason)
         return 1
