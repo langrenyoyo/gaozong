@@ -360,6 +360,23 @@ modules:
       - LEGACY-040
       - LEGACY-047
       - LEGACY-058
+    real_world_verifications:
+      - id: "M04-WECOM-P0-REAL-CALLBACK"
+        description: "企业微信第三方应用回调 P0 真实环境验证（2026-08-20，merchant.xiaogaoai.cn）"
+        source: "WECOM-P0-REAL-CALLBACK-VERIFICATION-1 + WECOM-P0-CLOSEOUT-AND-P1-READINESS-1"
+        real_environment: "PASS"
+        chain: "Enterprise WeCom → merchant.xiaogaoai.cn → nginx /api routing → 9000 WeCom Callback Router → signature verification → AES decrypt → suite_ticket event recognition → ACK success"
+        checks:
+          - "PUBLIC_HTTPS_CALLBACK = PASS（外网 400/200 可达，非 404/502/503）"
+          - "COMMAND_CALLBACK_SAVE = PASS（指令回调 URL 保存成功）"
+          - "GET_VERIFY_URL = PASS（验签 + AES 解密 + echostr 明文返回；实测 echostr receiveid 为 corpid，不按 suite_id 强校验）"
+          - "SUITE_TICKET_REAL_DELIVERY = PASS（10 分钟稳定投递，ticket_hash 前缀脱敏记录）"
+          - "COMMAND_CALLBACK_ACK = PASS（event_type=suite_ticket → ACK success 返回 200）"
+          - "DATA_CALLBACK_SAVE = PASS（同一物理 URL + 当前 Token/EncodingAESKey 保存成功）"
+          - "SAME_PHYSICAL_CALLBACK_URL = VALIDATED（指令/数据共用同一 URL）"
+          - "SECRET_EXPOSURE = NO / DB_CHANGE = 0 / MIGRATION = 0"
+        not_yet_verified:
+          - "P1-P4 能力（enterprise authorization / permanent_code / member sync / sales_staff binding / message dispatch / Template Card feedback）仍属未实现，不得标 PASS"
 
   - module_id: M05
     module_name: 小高素材库

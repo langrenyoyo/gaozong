@@ -6,7 +6,8 @@
 # G1-DELTA-RECONCILIATION-1：d1fbd04..44c5914，eligible 957→965（+8：D1 presign M05 / D2 migration dirs PLATFORM-RELEASE / D3 上传反馈 M05 / D4 前端 immutable PLATFORM-RELEASE）
 # G1-DELTA-RECONCILIATION-2（PROD-RELEASE-AUTOMATION-MINIMAL-1）：eligible 965→968（+3：scripts/prod_release.py、tests/test_prod_release.py、docs/operations/PRODUCTION_RELEASE.md，均 PLATFORM-RELEASE）
 # G1-DELTA B-2（DECISION AUTHORITY 裁定）：移除 FILE-000921（tests/test_replace_sensitive_words.py，随固定敏感词替换删除），eligible 968→967
-# ELIGIBLE / MAPPED / UNMAPPED = 967 / 967 / 0
+# G1-DELTA-WECOM-P0-CLOSEOUT-1（WECOM-P0-CLOSEOUT-AND-P1-READINESS-1）：eligible 967→971（+4：wecom_callback router / integrations/wecom __init__+crypto / test_wecom_callback_probe，均 M04）
+# ELIGIBLE / MAPPED / UNMAPPED = 971 / 971 / 0
 # 派生字段（module/depended_by/path_history）由生成器计算，禁人工双写
 # 本文件是 DERIVED GOVERNANCE ARTIFACT，禁止被应用启动读取
 # ============================================================
@@ -19,8 +20,8 @@ project:
   last_verified_at: "2026-08-14T00:00:00Z"
   generator_script: "e:/tmp/g1_build/build_code_index.py"
 summary:
-  eligible_files: 967
-  mapped_files: 967
+  eligible_files: 971
+  mapped_files: 971
   unmapped_files: 0
   repository_head_relation:
     auto_wechat_9000: "0035"
@@ -37824,3 +37825,163 @@ entries:
         line: 1
         note: "G1 分类依据：DOC/PLATFORM-RELEASE（PROD-RELEASE-AUTOMATION-MINIMAL-1）"
     notes: "生产发布 Runbook（prod_release CLI 操作指引）"
+  - id: "FILE-000969"
+    path: "app/routers/wecom_callback.py"
+    artifact_type: "BACKEND_ROUTER"
+    owner_type: "MODULE"
+    owner_id: "M04"
+    module: "M04"
+    status: "ACTIVE"
+    runtime_role: "HTTP_API"
+    confidence: "HIGH"
+    generated: false
+    generated_by: null
+    derived_from: null
+    entrypoints: ['HTTP router（见 app/routers/wecom_callback.py）']
+    data_owned: []
+    data_read: []
+    dependencies:
+      - type: "external"
+        target: "WECOM"
+        reason: "企业微信第三方应用回调"
+    depended_by: ['app/routers/capability_gateway.py', 'app/routers/wechat_tasks.py']
+    external_dependencies: []
+    compatibility:
+      comp_for: null
+      purpose: null
+      current_caller: null
+      removal_prerequisite: null
+      redirects: []
+    legacy:
+      legacy_id: null
+      historical_purpose: null
+      evidence: null
+      risk: null
+    section_evidence:
+      []
+    path_history: []
+    evidence:
+      - type: "FILE_PATH"
+        source: "app/routers/wecom_callback.py"
+        line: 1
+        note: "G1 分类依据：BACKEND_ROUTER/MODULE/M04（WECOM-P0-CLOSEOUT-AND-P1-READINESS-1）"
+    notes: "企微第三方应用回调路由（GET verifyURL + POST 指令回调验签/解密/识别/ACK）"
+  - id: "FILE-000970"
+    path: "app/integrations/wecom/__init__.py"
+    artifact_type: "BACKEND_CODE"
+    owner_type: "MODULE"
+    owner_id: "M04"
+    module: "M04"
+    status: "ACTIVE"
+    runtime_role: "NONE"
+    confidence: "MEDIUM"
+    generated: false
+    generated_by: null
+    derived_from: null
+    entrypoints: []
+    data_owned: []
+    data_read: []
+    dependencies:
+      []
+    depended_by: ['app/routers/capability_gateway.py', 'app/routers/wechat_tasks.py', 'app/routers/wecom_callback.py']
+    external_dependencies: []
+    compatibility:
+      comp_for: null
+      purpose: null
+      current_caller: null
+      removal_prerequisite: null
+      redirects: []
+    legacy:
+      legacy_id: null
+      historical_purpose: null
+      evidence: null
+      risk: null
+    section_evidence:
+      []
+    path_history: []
+    evidence:
+      - type: "FILE_PATH"
+        source: "app/integrations/wecom/__init__.py"
+        line: 1
+        note: "G1 分类依据：BACKEND_CODE/MODULE/M04（WECOM-P0-CLOSEOUT-AND-P1-READINESS-1）"
+    notes: "企微第三方应用集成包（协议层）"
+  - id: "FILE-000971"
+    path: "app/integrations/wecom/crypto.py"
+    artifact_type: "BACKEND_INTEGRATION"
+    owner_type: "MODULE"
+    owner_id: "M04"
+    module: "M04"
+    status: "ACTIVE"
+    runtime_role: "NONE"
+    confidence: "MEDIUM"
+    generated: false
+    generated_by: null
+    derived_from: null
+    entrypoints: []
+    data_owned: []
+    data_read: []
+    dependencies:
+      - type: "external"
+        target: "WECOM"
+        reason: "企业微信回调加解密协议"
+    depended_by: ['app/routers/capability_gateway.py', 'app/routers/wechat_tasks.py', 'app/routers/wecom_callback.py']
+    external_dependencies: []
+    compatibility:
+      comp_for: null
+      purpose: null
+      current_caller: null
+      removal_prerequisite: null
+      redirects: []
+    legacy:
+      legacy_id: null
+      historical_purpose: null
+      evidence: null
+      risk: null
+    section_evidence:
+      []
+    path_history: []
+    evidence:
+      - type: "FILE_PATH"
+        source: "app/integrations/wecom/crypto.py"
+        line: 1
+        note: "G1 分类依据：BACKEND_INTEGRATION/MODULE/M04（WECOM-P0-CLOSEOUT-AND-P1-READINESS-1）"
+    notes: "企微回调签名校验 + AES-256-CBC 解密 + 最小事件 envelope 解析（XXE 拒绝）"
+  - id: "FILE-000972"
+    path: "tests/test_wecom_callback_probe.py"
+    artifact_type: "TEST"
+    owner_type: "MODULE"
+    owner_id: "M04"
+    module: "M04"
+    status: "TEST"
+    runtime_role: "NONE"
+    confidence: "MEDIUM"
+    generated: false
+    generated_by: null
+    derived_from: null
+    entrypoints: []
+    data_owned: []
+    data_read: []
+    dependencies:
+      []
+    depended_by: ['app/routers/capability_gateway.py', 'app/routers/wechat_tasks.py']
+    external_dependencies: []
+    compatibility:
+      comp_for: null
+      purpose: null
+      current_caller: null
+      removal_prerequisite: null
+      redirects: []
+    legacy:
+      legacy_id: null
+      historical_purpose: null
+      evidence: null
+      risk: null
+    section_evidence:
+      []
+    path_history: []
+    evidence:
+      - type: "FILE_PATH"
+        source: "tests/test_wecom_callback_probe.py"
+        line: 1
+        note: "G1 分类依据：TEST/MODULE/M04（WECOM-P0-CLOSEOUT-AND-P1-READINESS-1）"
+    notes: "企微回调协议测试（GET verify + POST 指令事件，19 用例）"
