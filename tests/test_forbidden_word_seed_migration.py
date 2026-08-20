@@ -341,3 +341,65 @@ def test_pg_repeated_upgrade_and_downgrade_idempotent():
     cur = conn.cursor()
     cur.execute(f"DROP DATABASE IF EXISTS {DB}")
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1：prohibited_auto_reply 幂等 seed（非 migration）
+# ---------------------------------------------------------------------------
+
+def _seed_orm_session(db_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    return sessionmaker(bind=engine)()
+
+
+def test_seed_prohibited_auto_reply_idempotent_four_words_excluded_not_in_library():
+    """seed 幂等：四词入库、排除词不入、finance_compliance 原词保留。"""
+    from app.models import ForbiddenWord, ForbiddenWordLibrary
+    from app.services.forbidden_word_seed import (
+        LIBRARY_KEY,
+        WORDS,
+        seed_prohibited_auto_reply,
+    )
+
+    db_path = tempfile.mktemp(suffix=".db")
+    _run_sqlite_migration(db_path)  # 建表 + 0047（10 词库 / 403 词条）
+    db = _seed_orm_session(db_path)
+    try:
+        r1 = seed_prohibited_auto_reply(db)
+        assert r1["inserted"] == 4, f"首次应插入 4 词条: {r1}"
+        r2 = seed_prohibited_auto_reply(db)
+        assert r2["inserted"] == 0, "重复执行不得重复插入"
+
+        lib = db.query(ForbiddenWordLibrary).filter_by(library_key=LIBRARY_KEY).first()
+        assert lib is not None
+        assert lib.scope == "global"
+        assert lib.enabled is True
+        word_set = {
+            w[0]
+            for w in db.query(ForbiddenWord.word).filter_by(library_id=lib.id).all()
+        }
+        assert word_set == set(WORDS), f"词条不符: {word_set}"
+
+        # 排除词不进入新库
+        excluded = {"贷款", "金融", "分期", "征信"}
+        assert word_set & excluded == set(), f"排除词误入新库: {word_set & excluded}"
+
+        # finance_compliance 原词保留（0047 seed 含 贷款/金融/分期/征信）
+        finance = db.query(ForbiddenWordLibrary).filter_by(library_key="finance_compliance").first()
+        assert finance is not None
+        finance_words = {
+            w[0]
+            for w in db.query(ForbiddenWord.word).filter_by(library_id=finance.id).all()
+        }
+        assert finance_words & excluded, "finance_compliance 原词条不得被删除"
+        assert "黑户" in finance_words, "finance_compliance 历史黑户词条应保留"
+    finally:
+        db.close()

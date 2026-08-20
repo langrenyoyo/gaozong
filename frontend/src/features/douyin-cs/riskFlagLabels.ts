@@ -77,6 +77,10 @@ export const BLOCK_REASON_LABELS: Record<string, string> = {
   send_context_unavailable: "发送上下文不可用",
   // format
   format_invalid: "回复内容格式无效",
+  // P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1：prohibited_auto_reply 消息级阻断
+  // 只映射为"命中禁止自动回复规则"，不得映射为会话暂停/人工接管/AI 关闭
+  prohibited_auto_reply_input: "命中禁止自动回复规则",
+  prohibited_auto_reply: "命中禁止自动回复规则",
 };
 
 // 单个 risk_flag → 中文（未命中回退原值）
@@ -88,6 +92,24 @@ export function riskFlagLabel(flag: string): string {
 export function blockReasonLabel(reason: string | null | undefined): string {
   if (!reason) return "-";
   return BLOCK_REASON_LABELS[reason] || reason;
+}
+
+// P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1：prohibited 命中的 message-level 固定文案。
+// 展示必须是消息级（附着于被阻断的具体消息），不渲染为会话暂停/人工接管状态。
+export function prohibitedAutoReplyNotice(item: {
+  auto_reply_status?: string | null;
+  auto_reply_reason?: string | null;
+}): { title: string; description: string } | null {
+  if (
+    item.auto_reply_status === "not_replied" &&
+    item.auto_reply_reason === "prohibited_auto_reply"
+  ) {
+    return {
+      title: "本条消息未自动回复",
+      description: "命中禁止自动回复规则，后续消息不受影响。",
+    };
+  }
+  return null;
 }
 
 // 列表项中需要展示真实阻断原因的 run 字段子集（后端 AiAutoReplyRunListItem 已返回）

@@ -2215,3 +2215,128 @@ def test_structured_llm_decision_manual_required_defaults_to_false_when_omitted(
     # 显式 True 仍尊重
     parsed_true = _parse_structured_llm_decision('{"reply_text":"需要人工","manual_required":true}')
     assert parsed_true["manual_required"] is True
+
+
+# ---------------------------------------------------------------------------
+# P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1：prohibited_auto_reply 消息级阻断（pre-LLM）
+# ---------------------------------------------------------------------------
+
+def _seed_prohibited_auto_reply_words():
+    """在测试库插入 prohibited_auto_reply 词库 + 4 词条（幂等 seed）。"""
+    from app.services.forbidden_word_seed import seed_prohibited_auto_reply
+
+    db = TestSession()
+    try:
+        seed_prohibited_auto_reply(db)
+    finally:
+        db.close()
+
+
+def _run_one_auto_reply(text: str, *, event_key: str, server_message_id: str, fake_client) -> None:
+    """插入一条客户事件并跑一次自动回复（复用同一套绑定/设置）。"""
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    _insert_event(
+        text=text,
+        event_key=event_key,
+        server_message_id=server_message_id,
+        merchant_id="merchant-1",
+        tenant_id="tenant-1",
+    )
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client):
+        run_ai_auto_reply_dry_run(event_id=_latest_event_id(event_key))
+
+
+def _latest_event_id(event_key: str) -> int:
+    db = TestSession()
+    try:
+        row = db.query(DouyinWebhookEvent).filter(DouyinWebhookEvent.event_key == event_key).one()
+        return row.id
+    finally:
+        db.close()
+
+
+def test_prohibited_auto_reply_blocks_current_message_before_llm(monkeypatch):
+    """黑户命中 → blocked + LLM=0 + SEND=0，不改变 conversation 状态。"""
+    _seed_prohibited_auto_reply_words()
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True)
+    fake_client = FakeAiCsClient()
+    _run_one_auto_reply("我是黑户，能贷款吗", event_key="ev-black", server_message_id="msg-black", fake_client=fake_client)
+
+    run = _latest_run()
+    assert run.status == "blocked"
+    assert run.block_reason == "prohibited_auto_reply_input"
+    gate_results = json.loads(run.gate_results_json)
+    block = gate_results["pre_llm"]["prohibited_auto_reply"]
+    assert block["blocked"] is True
+    assert "黑户" in block["matched_words"]
+    assert fake_client.calls == [], "命中后不得调用 9100（LLM=0）"
+    db = TestSession()
+    try:
+        assert db.query(DouyinPrivateMessageSend).filter_by(auto_reply_run_id=run.id).count() == 0, "SEND=0"
+    finally:
+        db.close()
+
+
+def test_finance_compliance_words_not_blocked_by_pre_llm(monkeypatch):
+    """普通金融咨询词（贷款）不被新库阻断，继续进入现有 AI 链路。"""
+    _seed_prohibited_auto_reply_words()
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True)
+    fake_client = FakeAiCsClient()
+    _run_one_auto_reply("贷款怎么做", event_key="ev-finance", server_message_id="msg-finance", fake_client=fake_client)
+
+    run = _latest_run()
+    assert run.status == "decided", "finance_compliance 词不得触发 pre-LLM 阻断"
+    assert run.block_reason is None
+    assert len(fake_client.calls) == 1, "普通金融词应正常进入 LLM"
+
+
+def test_next_normal_message_recovers_after_prohibited_block(monkeypatch):
+    """高风险消息后下一条普通消息自动恢复正常 AI 链路。"""
+    _seed_prohibited_auto_reply_words()
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True)
+    fake_client = FakeAiCsClient()
+
+    _run_one_auto_reply("我征信花了还能办吗", event_key="ev-risky-1", server_message_id="msg-risky-1", fake_client=fake_client)
+    run1 = _latest_run()
+    assert run1.status == "blocked"
+    assert run1.block_reason == "prohibited_auto_reply_input"
+
+    _run_one_auto_reply("这个车是哪年的", event_key="ev-normal-1", server_message_id="msg-normal-1", fake_client=fake_client)
+    run2 = _latest_run()
+    assert run2.status == "decided", "下一条普通消息必须恢复 AI 链路"
+    assert run2.block_reason is None, "不得继承上一条 block_reason"
+    assert len(fake_client.calls) == 1, "仅普通消息调用 LLM（LLM 计数=1）"
+
+
+def test_multiple_rounds_no_state_pollution(monkeypatch):
+    """prohibited→normal→prohibited→normal 逐条独立判断，不污染会话状态。"""
+    _seed_prohibited_auto_reply_words()
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True)
+    fake_client = FakeAiCsClient()
+
+    sequence = [
+        ("我是黑户", "blocked", "ev-m1"),
+        ("多少钱", "decided", "ev-m2"),
+        ("老赖能买吗", "blocked", "ev-m3"),
+        ("在吗", "decided", "ev-m4"),
+    ]
+    for text, expect, key in sequence:
+        _run_one_auto_reply(text, event_key=key, server_message_id=f"msg-{key}", fake_client=fake_client)
+        run = _latest_run()
+        assert run.status == expect, f"消息 {text!r} 期望 {expect}，实际 {run.status}"
+
+    assert len(fake_client.calls) == 2, "normal 两条各调用一次 LLM"
+    db = TestSession()
+    try:
+        # conversation 级状态（manual takeover / autopilot）不得因 prohibited 命中改变
+        states = db.query(ConversationAutopilotState).all()
+        for state in states:
+            assert state.manual_takeover_until is None, "prohibited 命中不得触发人工接管"
+    finally:
+        db.close()

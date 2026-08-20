@@ -275,6 +275,14 @@ def _build_list_item(
     display_names: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
     display_names = display_names or {}
+    # P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1：message-level additive 可解释性字段。
+    # 仅 prohibited_auto_reply_input 命中时置 not_replied / prohibited_auto_reply；
+    # 普通运行不伪造新原因，保持 None（旧字段语义不变）。
+    auto_reply_status = None
+    auto_reply_reason = None
+    if row.status == "blocked" and row.block_reason == "prohibited_auto_reply_input":
+        auto_reply_status = "not_replied"
+        auto_reply_reason = "prohibited_auto_reply"
     data = {
         "id": row.id,
         "merchant_id": row.merchant_id,
@@ -293,6 +301,8 @@ def _build_list_item(
         "status": row.status,
         "skip_reason": row.skip_reason,
         "block_reason": row.block_reason,
+        "auto_reply_status": auto_reply_status,
+        "auto_reply_reason": auto_reply_reason,
         "decision_log_id": row.decision_log_id,
         "would_send_content_summary": _summary(row.would_send_content),
         "error_message": row.error_message,

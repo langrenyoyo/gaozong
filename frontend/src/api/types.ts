@@ -963,6 +963,9 @@ export interface AiAutoReplyRunListItem {
   status: AiAutoReplyRunStatus | string;
   skip_reason?: string | null;
   block_reason?: string | null;
+  // P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1：message-level 可解释性（additive，后端新增字段）
+  auto_reply_status?: string | null;
+  auto_reply_reason?: string | null;
   decision_log_id?: number | null;
   would_send_content_summary?: string | null;
   error_message?: string | null;

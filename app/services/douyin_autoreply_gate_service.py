@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -12,6 +13,7 @@ from app import config
 from app.models import AiAgent, AiAutoReplyRun, DouyinAccountAgentBinding, DouyinAccountAutoreplySetting
 from app.services.conversation_autopilot_state_service import evaluate_manual_takeover_gate
 from app.services.autoreply_admin_rollout_service import evaluate_db_rollout_gate
+from app.services.forbidden_word_service import check_forbidden_words
 from app.services.douyin_autoreply_settings_service import (
     parse_allowed_intents,
     parse_blocked_risk_flags,
@@ -20,6 +22,8 @@ from app.services.douyin_autoreply_settings_service import (
     parse_direct_llm_policy,
     parse_manual_review_risk_flags,
 )
+
+logger = logging.getLogger(__name__)
 
 COUNTED_RUN_STATUSES = ("blocked", "decided", "failed")
 
@@ -60,6 +64,57 @@ class GateDecision:
     gate_results: dict[str, Any] | None = None
 
 
+def _evaluate_prohibited_auto_reply(
+    db: Session,
+    *,
+    merchant_id: str,
+    conversation_short_id: str | None,
+    latest_message: str | None,
+    gate_results: dict[str, Any],
+) -> GateDecision | None:
+    """P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1：命中禁止自动回复词库 → 当前消息级阻断。
+
+    仅当命中 library_key='prohibited_auto_reply' 时阻断；普通违禁词（finance_compliance 等）
+    命中只走既有检测审计，不升级为 pre-LLM 阻断。命中只结束当前消息，不改变 conversation
+    状态、不触发人工接管、不调用 LLM/发送。检测异常 fail-open 到既有 gate 并记录 warning。
+    """
+    content = str(latest_message or "").strip()
+    if not content:
+        return None
+    try:
+        result = check_forbidden_words(
+            db,
+            merchant_id=merchant_id,
+            source="douyin_ai_auto_reply_pre_llm",
+            content=content,
+            context={"context_type": "conversation", "context_id": conversation_short_id},
+        )
+    except Exception as exc:  # noqa: BLE001  词库检测异常不阻断正常自动回复（fail-open + 记录）
+        logger.warning(
+            "pre_llm_prohibited_check_error merchant_id=%s conversation_short_id=%s "
+            "error_type=%s（词库检测失败，fail-open 到既有 gate）",
+            merchant_id,
+            conversation_short_id,
+            type(exc).__name__,
+        )
+        return None
+    block_hits = [hit for hit in result.hits if hit.library_key == "prohibited_auto_reply"]
+    if not block_hits:
+        return None
+    return GateDecision(
+        False,
+        "blocked",
+        "prohibited_auto_reply_input",
+        {
+            **gate_results,
+            "prohibited_auto_reply": {
+                "blocked": True,
+                "matched_words": [hit.word for hit in block_hits],
+            },
+        },
+    )
+
+
 def evaluate_pre_llm_gates(
     db: Session,
     *,
@@ -85,6 +140,22 @@ def evaluate_pre_llm_gates(
         return GateDecision(False, "skipped", "empty_message", gate_results)
     if not conversation_short_id:
         return GateDecision(False, "skipped", "conversation_missing", gate_results)
+    # Delta 4.2：先完成 latest customer check；非客户消息不执行禁止自动回复规则
+    if latest_message_state and latest_message_state.get("latest_is_customer_message") is False:
+        return GateDecision(False, "blocked", "latest_message_not_customer", gate_results)
+
+    # P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1：命中 prohibited_auto_reply → 当前消息级阻断
+    # （不调用 LLM / 不发送 / 不改 conversation 状态），reason=prohibited_auto_reply_input
+    prohibited = _evaluate_prohibited_auto_reply(
+        db,
+        merchant_id=merchant_id,
+        conversation_short_id=conversation_short_id,
+        latest_message=latest_message,
+        gate_results=gate_results,
+    )
+    if prohibited is not None:
+        return prohibited
+
     manual_takeover = evaluate_manual_takeover_gate(
         db,
         merchant_id=merchant_id,
@@ -95,9 +166,6 @@ def evaluate_pre_llm_gates(
     gate_results["manual_takeover"] = manual_takeover
     if manual_takeover.get("blocked") is True:
         return GateDecision(False, "blocked", "manual_takeover", gate_results)
-
-    if latest_message_state and latest_message_state.get("latest_is_customer_message") is False:
-        return GateDecision(False, "blocked", "latest_message_not_customer", gate_results)
 
     frequency = _frequency_snapshot(
         db,

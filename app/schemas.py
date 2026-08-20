@@ -1697,6 +1697,11 @@ class AiAutoReplyRunListItem(BaseModel):
     status: str
     skip_reason: Optional[str] = None
     block_reason: Optional[str] = None
+    # P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1：message-level 可解释性 additive 字段
+    # auto_reply_status="not_replied" + auto_reply_reason="prohibited_auto_reply" 时，
+    # 表示该消息命中禁止自动回复规则未回复（仅当前消息，不影响后续消息）。
+    auto_reply_status: Optional[str] = None
+    auto_reply_reason: Optional[str] = None
     decision_log_id: Optional[int] = None
     would_send_content_summary: Optional[str] = None
     error_message: Optional[str] = None

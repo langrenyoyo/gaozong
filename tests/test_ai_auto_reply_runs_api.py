@@ -529,3 +529,69 @@ def test_bad_gate_results_json_does_not_500():
 
     assert detail.status_code == 200
     assert detail.json()["data"]["gate_results"] == {}
+
+
+# ---------------------------------------------------------------------------
+# P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1：additive API（auto_reply_status / auto_reply_reason）
+# ---------------------------------------------------------------------------
+
+def test_list_runs_exposes_prohibited_auto_reply_additive_fields():
+    """prohibited 命中 → auto_reply_status=not_replied + auto_reply_reason=prohibited_auto_reply。"""
+    _insert_run(
+        status="blocked",
+        block_reason="prohibited_auto_reply_input",
+        gate_results_json=json.dumps(
+            {"pre_llm": {"prohibited_auto_reply": {"blocked": True, "matched_words": ["黑户"]}}},
+            ensure_ascii=False,
+        ),
+        trigger_event_key="event-prohibited",
+    )
+    response = _client().get("/ai-auto-reply-runs")
+    assert response.status_code == 200
+    item = response.json()["data"]["items"][0]
+    assert item["auto_reply_status"] == "not_replied"
+    assert item["auto_reply_reason"] == "prohibited_auto_reply"
+    # 旧字段保持原样
+    assert item["status"] == "blocked"
+    assert item["block_reason"] == "prohibited_auto_reply_input"
+    assert "gate_results_json" not in item
+
+
+def test_list_runs_keeps_old_fields_for_normal_blocked():
+    """普通 blocked（manual_takeover）不伪造新原因字段（保持 None）。"""
+    _insert_run(status="blocked", block_reason="manual_takeover", trigger_event_key="event-manual")
+    response = _client().get("/ai-auto-reply-runs")
+    assert response.status_code == 200
+    item = response.json()["data"]["items"][0]
+    assert item["status"] == "blocked"
+    assert item["block_reason"] == "manual_takeover"
+    assert item["auto_reply_status"] is None
+    assert item["auto_reply_reason"] is None
+
+
+def test_detail_exposes_additive_and_merchant_isolation_kept():
+    """详情暴露 additive 字段；商户隔离与伪造 merchant_id 过滤保持。"""
+    run_id_a = _insert_run(
+        status="blocked",
+        block_reason="prohibited_auto_reply_input",
+        gate_results_json=json.dumps(
+            {"pre_llm": {"prohibited_auto_reply": {"blocked": True, "matched_words": ["老赖"]}}},
+            ensure_ascii=False,
+        ),
+        trigger_event_key="event-detail-a",
+        merchant_id="merchant-a",
+    )
+    _insert_run(status="decided", trigger_event_key="event-detail-b", merchant_id="merchant-b")
+
+    detail = _client().get(f"/ai-auto-reply-runs/{run_id_a}")
+    assert detail.status_code == 200
+    data = detail.json()["data"]
+    assert data["auto_reply_status"] == "not_replied"
+    assert data["auto_reply_reason"] == "prohibited_auto_reply"
+
+    # forged merchant_id 不能绕过当前商户过滤（A 的 context 只能看到 A 的记录）
+    resp_b = _client().get("/ai-auto-reply-runs", params={"merchant_id": "merchant-b"})
+    assert resp_b.status_code == 200
+    items = resp_b.json()["data"]["items"]
+    assert len(items) == 1
+    assert items[0]["merchant_id"] == "merchant-a", "forged merchant_id 不得切换到 B 商户"

@@ -144,7 +144,8 @@ GMP webhook
 
 ### pre-LLM gate
 - 代码：`gate_service.py:63` evaluate_pre_llm_gates
-- 链：settings缺失→manual_takeover阻断→latest_message_not_customer→每小时频控
+- 链：settings缺失→latest_message_not_customer→**prohibited_auto_reply（P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1）**→manual_takeover→每小时频控
+- **prohibited_auto_reply**：命中 `library_key='prohibited_auto_reply'` 词库（黑户/老赖/我黑了/征信花了，seed-only 幂等交付）→ 当前消息级阻断（reason=`prohibited_auto_reply_input`，LLM=0/发送=0），不改 conversation 状态、不触发人工接管；下一条普通消息自动恢复正常 AI 链路。普通违禁词（finance_compliance 等）不升级为 pre-LLM 阻断
 
 ### post-LLM gate
 - 代码：`gate_service.py:117` evaluate_post_llm_gates

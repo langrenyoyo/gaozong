@@ -23,7 +23,11 @@ import type {
 } from "../types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
 import { userFacingError } from "../../../lib/userFacingError";
-import { blockReasonDetailText, blockReasonLabel } from "../riskFlagLabels";
+import {
+  blockReasonDetailText,
+  blockReasonLabel,
+  prohibitedAutoReplyNotice,
+} from "../riskFlagLabels";
 import ModuleTabs from "../../../components/ModuleTabs";
 
 const PAGE_SIZE = 20;
@@ -223,6 +227,19 @@ function blockReasonText(item: AiAutoReplyRunListItem): string {
   });
 }
 
+// P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1：message-level 固定提示（附着于被阻断的具体消息）。
+// 不展示机器码；不得渲染为会话暂停/人工接管/AI 关闭状态。
+function ProhibitedAutoReplyNotice({ item }: { item: AiAutoReplyRunListItem }) {
+  const notice = prohibitedAutoReplyNotice(item);
+  if (!notice) return null;
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs font-semibold text-amber-700">{notice.title}</span>
+      <span className="text-[11px] leading-5 text-slate-600">{notice.description}</span>
+    </div>
+  );
+}
+
 function buildConversationHref(item: {
   account_open_id?: string | null;
   conversation_short_id?: string | null;
@@ -412,6 +429,11 @@ function DetailModal({
                   <span>此详情只展示运行结果，不提供任何写入操作入口。</span>
                   <Chip tone={STATUS_TONES[detail.status] || "slate"}>{statusLabel(detail.status)}</Chip>
                 </div>
+                {prohibitedAutoReplyNotice(detail) && (
+                  <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                    <ProhibitedAutoReplyNotice item={detail} />
+                  </div>
+                )}
               </section>
 
               <section className="rounded-md border border-slate-200 bg-white p-4">
@@ -839,9 +861,13 @@ export default function DouyinAutoReplyRunsPage() {
                   </td>
                   <td className="px-4 py-3 text-slate-600">{modeLabel(item.mode)}</td>
                   <td className="px-4 py-3">
-                    <div className="line-clamp-2 text-slate-600" title={blockReasonText(item)}>
-                      {blockReasonText(item)}
-                    </div>
+                    {prohibitedAutoReplyNotice(item) ? (
+                      <ProhibitedAutoReplyNotice item={item} />
+                    ) : (
+                      <div className="line-clamp-2 text-slate-600" title={blockReasonText(item)}>
+                        {blockReasonText(item)}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="line-clamp-2 text-slate-600" title={item.error_message || undefined}>
