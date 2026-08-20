@@ -74,7 +74,7 @@ def test_get_valid_signature_returns_exact_plaintext(client, wecom_cfg):
     encrypt = _encrypt(plaintext.encode(), AES_KEY, SUITE_ID)
     sig = _sign(TOKEN, TS, NONCE, encrypt)
     r = client.get(
-        "/api/integrations/wecom/callback",
+        "/integrations/wecom/callback",
         params={"msg_signature": sig, "timestamp": TS, "nonce": NONCE, "echostr": encrypt},
     )
     assert r.status_code == 200
@@ -85,7 +85,7 @@ def test_get_invalid_signature_fail_closed(client, wecom_cfg):
     encrypt = _encrypt(b"echo", AES_KEY, SUITE_ID)
     bad_sig = _sign("wrong-token", TS, NONCE, encrypt)
     r = client.get(
-        "/api/integrations/wecom/callback",
+        "/integrations/wecom/callback",
         params={"msg_signature": bad_sig, "timestamp": TS, "nonce": NONCE, "echostr": encrypt},
     )
     assert r.status_code == 400
@@ -97,7 +97,7 @@ def test_get_modified_echostr_fail_closed(client, wecom_cfg):
     modified = ("A" if encrypt[0] != "A" else "B") + encrypt[1:]
     sig = _sign(TOKEN, TS, NONCE, encrypt)  # 签名用原密文 → 验签必失败
     r = client.get(
-        "/api/integrations/wecom/callback",
+        "/integrations/wecom/callback",
         params={"msg_signature": sig, "timestamp": TS, "nonce": NONCE, "echostr": modified},
     )
     assert r.status_code == 400
@@ -107,7 +107,7 @@ def test_get_wrong_token_fail_closed(client, wecom_cfg):
     encrypt = _encrypt(b"echo", AES_KEY, SUITE_ID)
     sig = _sign("not-the-configured-token", TS, NONCE, encrypt)
     r = client.get(
-        "/api/integrations/wecom/callback",
+        "/integrations/wecom/callback",
         params={"msg_signature": sig, "timestamp": TS, "nonce": NONCE, "echostr": encrypt},
     )
     assert r.status_code == 400
@@ -118,7 +118,7 @@ def test_get_wrong_aes_key_fail_closed(client, wecom_cfg):
     encrypt = _encrypt(b"echo", wrong_key, SUITE_ID)  # 用错误 key 加密
     sig = _sign(TOKEN, TS, NONCE, encrypt)  # 签名只依赖 token/echostr → 验签通过
     r = client.get(
-        "/api/integrations/wecom/callback",
+        "/integrations/wecom/callback",
         params={"msg_signature": sig, "timestamp": TS, "nonce": NONCE, "echostr": encrypt},
     )
     assert r.status_code == 400  # 解密失败
@@ -128,7 +128,7 @@ def test_get_missing_query_param_fail_closed(client, wecom_cfg):
     encrypt = _encrypt(b"echo", AES_KEY, SUITE_ID)
     sig = _sign(TOKEN, TS, NONCE, encrypt)
     r = client.get(
-        "/api/integrations/wecom/callback",
+        "/integrations/wecom/callback",
         params={"msg_signature": sig, "timestamp": TS, "echostr": encrypt},  # 缺 nonce
     )
     assert r.status_code == 422
@@ -138,7 +138,7 @@ def test_get_suite_identity_mismatch_fail_closed(client, wecom_cfg):
     encrypt = _encrypt(b"echo", AES_KEY, "another-corp-id")  # receiveid 不匹配
     sig = _sign(TOKEN, TS, NONCE, encrypt)
     r = client.get(
-        "/api/integrations/wecom/callback",
+        "/integrations/wecom/callback",
         params={"msg_signature": sig, "timestamp": TS, "nonce": NONCE, "echostr": encrypt},
     )
     assert r.status_code == 400
@@ -151,7 +151,7 @@ def test_get_config_missing_fail_closed(client, monkeypatch):
     encrypt = _encrypt(b"echo", AES_KEY, SUITE_ID)
     sig = _sign(TOKEN, TS, NONCE, encrypt)
     r = client.get(
-        "/api/integrations/wecom/callback",
+        "/integrations/wecom/callback",
         params={"msg_signature": sig, "timestamp": TS, "nonce": NONCE, "echostr": encrypt},
     )
     assert r.status_code == 400
@@ -163,7 +163,7 @@ def _post(client, encrypt: str, *, timestamp: str = TS, nonce: str = NONCE, toke
           body: str | None = None):
     sig = _sign(token, timestamp, nonce, encrypt)
     return client.post(
-        "/api/integrations/wecom/callback",
+        "/integrations/wecom/callback",
         params={"msg_signature": sig, "timestamp": timestamp, "nonce": nonce},
         content=body if body is not None else _outer_xml(encrypt),
         headers={"Content-Type": "text/xml"},
@@ -261,7 +261,7 @@ def test_post_xxe_rejected(client, wecom_cfg):
         "<xml><Encrypt><![CDATA[&xxe;]]></Encrypt></xml>"
     )
     r = client.post(
-        "/api/integrations/wecom/callback",
+        "/integrations/wecom/callback",
         params={"msg_signature": "deadbeef", "timestamp": TS, "nonce": NONCE},
         content=evil,
         headers={"Content-Type": "text/xml"},

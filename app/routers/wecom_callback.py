@@ -24,7 +24,9 @@ from app.integrations.wecom.crypto import WeComCallbackError
 
 logger = logging.getLogger("wecom_callback_router")
 
-router = APIRouter(prefix="/api/integrations/wecom", tags=["企业微信回调"])
+# 9000 内部路由不带 /api 前缀（项目惯例：nginx 剥离 /api/ 后转发到 9000）。
+# 外部 endpoint 保持 /api/integrations/wecom/callback（任务书指定，由反代剥离 /api 匹配）。
+router = APIRouter(prefix="/integrations/wecom", tags=["企业微信回调"])
 
 # P0 Probe 可识别事件：suite_ticket / create_auth / change_auth / cancel_auth
 _RECOGNIZED_INFO_TYPES = frozenset(
