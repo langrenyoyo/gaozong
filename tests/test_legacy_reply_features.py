@@ -180,14 +180,14 @@ def test_legacy_hard_violation_baseline_values(tmp_path, monkeypatch):
     )
     assert response.status_code == 200
     data = response.json()
-    # 基线对照（来自 3250b04）
+    # 当前 Legacy 行为：虚假确认仍阻断；已移除的无条件联系标记不再出现。
     assert data["reply_text"] == "已收到您的联系方式了，我安排同事跟进。"
     assert data["manual_required"] is True
     assert data["auto_send"] is False
     assert data["match_level"] == "direct_llm_reply"
     assert data["llm_call_count"] == 2
     assert "hard_false_contact_confirmation" in data["risk_flags"]
-    assert "hard_unfounded_contact_followup_commitment" in data["risk_flags"]
+    assert "hard_unfounded_contact_followup_commitment" not in data["risk_flags"]
     assert "llm_retry_combined" in data["warnings"]
     assert "hard_violation_blocked" in data["warnings"]
     assert "llm_retry_combined_still_unqualified_kept_original" in data["warnings"]
@@ -208,7 +208,7 @@ def test_legacy_normal_reply_baseline_keys(tmp_path, monkeypatch):
     )
     assert response.status_code == 200
     data = response.json()
-    # 完整键集合（来自 3250b04，无 output_schema_version/decision/messages）
+    # 当前 Legacy 完整键集合，无 output_schema_version/decision/messages。
     expected_keys = {
         "agent_category", "agent_id", "agent_name", "auto_send", "confidence",
         "decision_version", "detected_contacts", "detected_vehicle", "elapsed_ms",
@@ -219,7 +219,7 @@ def test_legacy_normal_reply_baseline_keys(tmp_path, monkeypatch):
         "recommended_vehicles", "reply_char_count", "reply_question_count",
         "reply_sentence_count", "reply_suggestion_total_ms", "reply_text", "risk_flags",
         "source_chunks", "tags", "target_category", "target_vehicle_name", "timeout_layer",
-        "timeout_seconds", "warnings",
+        "timeout_seconds", "warnings", "customer_profile_update",
     }
     assert set(data.keys()) == expected_keys
     # 无 Schema 2.0 键

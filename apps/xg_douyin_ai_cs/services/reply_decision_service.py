@@ -39,7 +39,11 @@ from apps.xg_douyin_ai_cs.services.reply_kernel.mode import (
     get_kernel_runtime_settings,
 )
 from apps.xg_douyin_ai_cs.services.reply_kernel.context import ReplyContext
-from apps.xg_douyin_ai_cs.services.reply_kernel.policy import ReplyPolicyDecision, decide as kernel_decide
+from apps.xg_douyin_ai_cs.services.reply_kernel.policy import (
+    ReplyPolicyDecision,
+    classify_scene,
+    decide as kernel_decide,
+)
 from apps.xg_douyin_ai_cs.services.reply_kernel.validator import validate as kernel_validate
 from app.services.contact_extractor import (
     analyze_contact_state,
@@ -432,6 +436,7 @@ def _build_reply_context(
         agent_phone_goal=agent_phone_goal,
         scene_suitable_for_lead=_scene_suitable_for_lead_capture(latest),
         customer_refused_lead=_customer_refused_lead(latest),
+        store_address=str(agent.get("store_address") or ""),
         known_customer_info=known_customer_info.get("known_customer_info") if known_customer_info else None,
     )
 
@@ -1228,6 +1233,12 @@ def _build_llm_reply(
         .get("contact", {})
         .get("status", "NONE")
     )
+    scene = classify_scene(
+        request.latest_message,
+        contact_state=contact_state,
+        store_address=str(merchant_prompt.get("store_address") or ""),
+    )
+    recent_ai_replies = _recent_ai_replies(request.conversation_history)
     reply_text = str(decision.get("reply_text") or "")
     reasking_known = _is_reply_reasking_known_slots(reply_text, slots)
     # A4：仅当 Agent 启用手机号留资目标、contact_state==NONE、场景适合、客户未拒绝、
@@ -1263,9 +1274,11 @@ def _build_llm_reply(
     # 首调后违禁词确定性检查：命中并入 retry_combined（最多 1 次合并纠正，总模型调用 ≤2）。
     forbidden_words = list(getattr(request, "forbidden_words", None) or [])
     first_forbidden_hits = _check_forbidden_words(reply_text, forbidden_words)
+    diversity_violation = _is_similar_to_recent_ai_reply(reply_text, recent_ai_replies)
     if (
         reasking_known or missing_phone_goal or contact_violation or off_platform_promise
         or unfounded_followup or redundant_contact_mention or first_forbidden_hits
+        or diversity_violation
     ):
         retry_messages = _build_llm_combined_retry_messages(
             messages,
@@ -1276,6 +1289,9 @@ def _build_llm_reply(
             unfounded_followup=unfounded_followup,
             redundant_contact_mention=redundant_contact_mention,
             forbidden_hits=first_forbidden_hits,
+            diversity_violation=diversity_violation,
+            scene=scene,
+            contact_state=contact_state,
             bad_reply=reply_text,
         )
         try:
@@ -1316,10 +1332,11 @@ def _build_llm_reply(
             still_contact_violation = _contact_reply_violation(contact_state, still_reply)
             still_off_platform_promise = _off_platform_promise_violation(still_reply)
             still_unfounded_followup = _unfounded_contact_followup_commitment_violation(contact_state, still_reply)
-            if still_reasking or still_missing_phone or still_contact_violation or still_off_platform_promise or still_unfounded_followup:
-                retry_warnings.append("llm_retry_combined_still_unqualified_kept_original")
+            still_diversity_violation = _is_similar_to_recent_ai_reply(still_reply, recent_ai_replies)
             # Hard 违规：retry 后仍命中联系方式/资料报价/无条件联系承诺 → 不可豁免 Hard 风险标记
             hard_flags: list[str] = []
+            if still_reasking or still_missing_phone or still_contact_violation or still_off_platform_promise or still_unfounded_followup or still_diversity_violation:
+                retry_warnings.append("llm_retry_combined_still_unqualified_kept_original")
             if still_contact_violation:
                 hard_flags.append(CONTACT_VIOLATION_TO_HARD_FLAG.get(
                     still_contact_violation, "hard_false_contact_confirmation"))
@@ -1336,6 +1353,14 @@ def _build_llm_reply(
                     f"回复仍存在 Hard 违规，需人工确认；违规：{', '.join(hard_flags)}"
                 )
                 retry_warnings.append("hard_violation_blocked")
+            elif still_diversity_violation:
+                decision["reply_text"] = _build_scene_safe_fallback(
+                    latest_message=request.latest_message,
+                    scene=scene,
+                    contact_state=contact_state,
+                    store_address=str(merchant_prompt.get("store_address") or ""),
+                )
+                retry_warnings.append("llm_retry_diversity_fallback")
     # 第五节：违禁词最终检查——首调命中已在阶段四并入 retry_combined（最多 1 次合并纠正）；
     # 合并纠正后（或首调未触发 retry 时）仍命中则阻断转人工，不再调用模型。
     retry_forbidden_hits = _check_forbidden_words(str(decision.get("reply_text") or ""), forbidden_words)
@@ -1475,7 +1500,7 @@ def _build_fixed_prompt_template(merchant_prompt: dict) -> str:
     - 一轮一动作：回答 或 直接留资，不堆叠"回答+原因+预算/年份/城市追问+留资"；
     - 金融：平台内不展开，不报首付/月供/利率数字，不判资质，简短说明不便展开+留资；
     - 价格：平台内不展开，不报数字，不解释价格形成原因；
-    - 地址：store_address 有值直接回答，空值自然留资；
+    - 地址：store_address 有值时 NONE/VALID 都直接回答，空值按联系方式状态承接；
     - 称呼：preferred_salutation 优先，可信事实判断，无法判断用"老板"，未知性别不猜；
     - 保留：ContactState 五态、历史信任、防编造、prompt_injection、customer_profile_update、RAG 降级、商家联系方式不回 Prompt。
     store_name 仅来自 agent_config.store_name；prompt/knowledge_base_text/store_phone/store_wechat 不出现。
@@ -1525,6 +1550,8 @@ def _build_fixed_prompt_template(merchant_prompt: dict) -> str:
 known_customer.info 已有字段直接承接，不追问。must_not_ask_again 列出的不重复问。
 推荐车型用"我们有/我们做"，不用"可能有/也许有"。
 
+若最近几轮 AI 已使用过相同或高度相似的句式，在不改变当前业务动作、客户事实、联系方式状态和安全限制的前提下，换一种自然表达。不得为了追求变化新增事实、承诺、优惠、金融结论、商家联系方式或额外追问。
+
 ## 四、联系方式规则
 客服引导统一说"留个联系方式"，不主动提绿泡泡/v/微信/手机号/号码等具体形态。
 只有 contact_state=VALID 才允许确认已收到联系方式。非 VALID 不得声称已收到/已记录/已拿到。
@@ -1536,21 +1563,21 @@ VALID 后不重复索要、不主动提"您之前留过联系方式"等模板话
 
 ## 五、特殊场景规则
 ### 商家联系方式（客户问"怎么联系/电话多少/微信多少/怎么加你"）
-不发商家自己的电话或微信。contact_state 非 VALID 时回复"这里不太方便直接发，你留个联系方式我+你"类（称呼用 salutation）；VALID（已留联系方式）时不索要联系方式，改承接"我让同事核实后联系您"类，不提"留个联系方式"。
+不发商家自己的电话或微信。contact_state 非 VALID 时回复"这里不太方便直接发，你留个联系方式我+你"类（称呼用 salutation）；VALID（已留联系方式）时不索要联系方式，改为"这里不方便直接发，我让同事和您对接"类，不提"留个联系方式"，不使用无关的"核实"。
 
 ### 地址/定位（客户问"店铺在哪/发个定位/怎么导航/在哪"）
 地址已填写：直接简短回答，如"老板，我们店在{store_address}"。
-地址未填写：不输出"未配置/系统没有/档案没填/未填写"等占位文本。contact_state 非 VALID 时改为"老板，你留个联系方式，我发你"；VALID 时不索要联系方式，改承接"老板，我让同事把地址发您"类，不提"留个联系方式"。
+地址未填写：不输出"未配置/系统没有/档案没填/未填写"等占位文本。contact_state 非 VALID 时改为"老板，你留个联系方式，我发你"；VALID 时不索要联系方式，改承接"老板，我让同事把位置发您"类，不提"留个联系方式"。地址已填写时 NONE/VALID 都直接回答真实地址，不进入人工承接。
 注意：不能承诺"已经给你发定位"（平台技术上无法发地图定位），"我发你"作为留资承接话术可用。
 
 ### 金融（客户问"分期/贷款/首付/月供/利率/按揭/征信/资质/审批/免息/零首付/车贷"等）
 平台内不展开。不解释金融方案，不报具体首付/月供/利率数字，不评估贷款资质，不判断客户能否审批，不提供规避资质或审核方案。
-简短说明不便展开。contact_state 非 VALID 时引导留资："老板这个不太方便在这里说，你留个联系方式我+你"；VALID（已留联系方式）时不索要联系方式，改承接："老板这个不太方便在这里说，我让同事核实后联系您"。
+简短说明不便展开。contact_state 非 VALID 时引导留资："老板这个不太方便在这里说，你留个联系方式我+你"；VALID（已留联系方式）时不索要联系方式，改为"这个得单独沟通，我让同事和您具体聊"类，不使用价格场景的"核实"骨架。
 零首付/0首付同此处理。
 
 ### 价格（客户问"多少钱/什么价/最低多少/报价/落地多少/优惠多少/底价/裸车价/成交价"等）
 平台内不展开。不报具体价格数字，不解释"价格受车型年份配置车况影响"等形成原因。
-简短说明不便展开。contact_state 非 VALID 时引导留资："老板，这里不方便展开，留个联系方式我+你"；VALID 时不索要联系方式，改承接："老板，这里不方便展开，我让同事核实后联系您"。
+简短说明不便展开。contact_state 非 VALID 时引导留资："老板，这里不方便展开，留个联系方式我+你"；VALID 时不索要联系方式，改为"老板，这台具体价格我让同事帮您核一下"类，聚焦具体车辆和价格。
 注意：客户陈述自己预算（"我预算20万""20万左右有吗"）是需求事实，不是向 AI 索价，不得触发价格 handoff，正常回答。
 
 ### 资料/车源/检测报告/图片/配置
@@ -1637,14 +1664,34 @@ def _build_decision_constraint_text(decision: ReplyPolicyDecision) -> str:
         parts.append("- 不得再次完整索要联系方式")
     if decision.may_request_contact_completion is True:
         parts.append("- 可引导客户补全不完整的联系方式")
-    if decision.primary_action == "OFF_PLATFORM_DETAIL_HANDOFF":
-        # P0-V3.1 F-1 修复：handoff 话术按 contact_state 条件化。
-        # VALID（已留资）时不得再索要联系方式，改为"安排同事核实后联系您"类承接；
-        # 非 VALID 时引导客户留个联系方式后再沟通。
+    if decision.contact_claim == "RECEIVED":
+        parts.append("- 不得再次索要联系方式")
+    scene = getattr(decision, "scene", "GENERAL_INQUIRY")
+    if scene == "STORE_LOCATION":
         if decision.contact_claim == "RECEIVED":
-            parts.append("- 客户问价格/金融/资料/车源/检测报告等时，平台内不展开，不得报具体数字或承诺发送；客户已留联系方式，安排同事核实后联系客户，不得再次索要联系方式")
+            parts.append("- 当前是门店位置问题；若商家事实中有地址，直接回答真实地址；若无地址，只做位置人工承接，不重复索要联系方式")
         else:
-            parts.append("- 客户问价格/金融/资料/车源/检测报告等时，平台内不展开，引导客户留个联系方式后再沟通，不得报具体数字或承诺发送")
+            parts.append("- 当前是门店位置问题；若商家事实中有地址，直接回答真实地址；若无地址，引导客户留个联系方式后再发位置")
+    elif scene == "PRICE_DETAIL":
+        if decision.contact_claim == "RECEIVED":
+            parts.append("- 当前是具体价格问题；平台内不展开、不报数字，聚焦具体车辆/价格核实，不得再次索要联系方式")
+        else:
+            parts.append("- 当前是具体价格问题；平台内不展开、不报数字，简短引导留联系方式后核实，不承诺发送报价")
+    elif scene == "FINANCE_DETAIL":
+        if decision.contact_claim == "RECEIVED":
+            parts.append("- 当前是金融方案问题；不报首付/月供/利率、不判资质，改为单独沟通或人工对接，不得再次索要联系方式")
+        else:
+            parts.append("- 当前是金融方案问题；不报首付/月供/利率、不判资质，简短引导留联系方式后再沟通")
+    elif scene == "MERCHANT_CONTACT_REQUEST":
+        if decision.contact_claim == "RECEIVED":
+            parts.append("- 当前是索要商家联系方式；不得输出商家电话/微信，说明不便直接发送并安排同事对接，不得使用无关的核实话术或再次索要")
+        else:
+            parts.append("- 当前是索要商家联系方式；不得输出商家电话/微信，说明不便直接发送并引导客户留下自己的联系方式")
+    elif decision.primary_action == "OFF_PLATFORM_DETAIL_HANDOFF":
+        if decision.contact_claim == "RECEIVED":
+            parts.append("- 平台外详情不展开，不报具体数字或承诺发送；客户已留联系方式，安排同事承接，不得再次索要")
+        else:
+            parts.append("- 平台外详情不展开，不报具体数字或承诺发送，简短引导客户留联系方式后再沟通")
     parts.append(f"- 称呼使用：{decision.salutation}")
     parts.append(f"- 只输出一条消息，最多一个补充问题")
     return "\n".join(parts)
@@ -1829,6 +1876,9 @@ def _build_llm_combined_retry_messages(
     unfounded_followup: str | None = None,
     redundant_contact_mention: bool = False,
     forbidden_hits: list[str] | None = None,
+    diversity_violation: bool = False,
+    scene: str = "GENERAL_INQUIRY",
+    contact_state: str = "NONE",
     bad_reply: str,
 ) -> list[dict]:
     """阶段四合并纠正：首调后一次性检查"重复询问已知信息"+"遗漏手机号目标"+
@@ -1854,6 +1904,8 @@ def _build_llm_combined_retry_messages(
         reasons.append("客户尚未提供有效联系方式，上一版回复却无条件承诺安排同事联系，应改为引导客户先留联系方式")
     if redundant_contact_mention:
         reasons.append("联系方式已确认，但客户本轮未询问联系方式，请静默使用该事实，不要主动提及客户以前留过联系方式")
+    if diversity_violation:
+        reasons.append("上一版业务动作正确但与最近 AI 回复表达过于相似")
     if forbidden_hits:
         reasons.append("上一版回复命中平台违禁词：" + "、".join(forbidden_hits) + "，不得出现这些词或其变体")
     forbidden_instruction = (
@@ -1873,6 +1925,9 @@ def _build_llm_combined_retry_messages(
             "简短说不便展开+留资（如\"老板这个不太方便在这里说，你留个联系方式我+你\"）。"
             "客户索要资料/报价/检测报告等时，说明平台内不方便展开，引导客户留个联系方式后再沟通，"
             "不得承诺把具体内容发到客户手机或绿泡泡；客户未留有效联系方式时不得无条件承诺安排同事联系。"
+            f"当前场景是 {scene}，当前联系方式状态是 {contact_state}。"
+            "保持上一版的 primary action、contact action、联系方式状态、事实和安全边界完全不变，"
+            "只换一种简短自然的表达。不得增加新信息、新承诺、新销售动作或额外问题。"
             + forbidden_instruction
         ),
     }
@@ -1889,6 +1944,9 @@ def _combined_retry_safety_fallback(
     customer_memory: object,
     slots: dict[str, Any],
     missing_phone_goal: bool,
+    scene: str | None = None,
+    contact_state: str = "NONE",
+    store_address: str = "",
 ) -> str:
     """合并纠正失败或结果仍不合格时的安全降级：手机号目标存在时优先用手机号降级，
     否则用已知信息上下文降级。不发起模型调用，不影响总调用次数（仍为 2 次）。"""
@@ -1897,6 +1955,13 @@ def _combined_retry_safety_fallback(
             latest_message=latest_message,
             conversation_history=conversation_history,
             customer_memory=customer_memory,
+        )
+    if scene:
+        return _build_scene_safe_fallback(
+            latest_message=latest_message,
+            scene=scene,
+            contact_state=contact_state,
+            store_address=store_address,
         )
     return _build_contextual_customer_reply(
         latest_message=latest_message,
@@ -3401,11 +3466,48 @@ def _needs_safe_direct_reply_override(
     return False
 
 
+def _build_scene_safe_fallback(
+    *,
+    latest_message: str,
+    scene: str | None = None,
+    contact_state: str = "NONE",
+    store_address: str = "",
+) -> str:
+    """按场景提供稳定安全回退，业务动作固定、句式不跨场景复用。"""
+    resolved_scene = scene or classify_scene(
+        latest_message,
+        contact_state=contact_state,
+        store_address=store_address,
+    )
+    valid = contact_state == "VALID"
+    if resolved_scene == "STORE_LOCATION":
+        if str(store_address or "").strip():
+            return f"老板，我们店在{str(store_address).strip()}。"
+        return "老板，我让同事把位置发您。" if valid else "老板，你留个联系方式，我发你。"
+    if resolved_scene == "PRICE_DETAIL":
+        return "老板，这台具体价格我让同事帮您核一下。" if valid else "老板，这里不方便展开，留个联系方式我+你"
+    if resolved_scene == "FINANCE_DETAIL":
+        if valid:
+            if _contains_any(latest_message, ("资质", "征信", "审批", "能批", "能贷")):
+                return "老板，这个得具体沟通，我让同事跟您对接。"
+            return "老板，这个得单独沟通，我让同事和您具体聊。"
+        if _contains_any(latest_message, ("资质", "征信", "审批", "能批", "能贷")):
+            return "老板，这块得具体沟通，方便留个联系方式吗？"
+        return "老板这个不太方便在这里说，你留个联系方式我+你"
+    if resolved_scene == "MERCHANT_CONTACT_REQUEST":
+        return "老板，这里不方便直接发，我让同事和您对接。" if valid else "老板，这里不太方便直接发，你留个联系方式我+你。"
+    if resolved_scene == "CONTACT_COMPLETION":
+        return "老板，您发的联系方式好像不太完整，麻烦再发一遍。"
+    return "有的老板，你想了解混动还是纯电"
+
+
 def _build_safe_direct_reply(
     *,
     latest_message: str,
     risk_flags: list[str],
     intent: str | None,
+    contact_state: str = "NONE",
+    store_address: str = "",
 ) -> str:
     if intent == "greeting":
         return _safe_low_risk_direct_reply(intent)
@@ -3414,12 +3516,34 @@ def _build_safe_direct_reply(
         subject = f"{vehicle}是比较热门的车型。" if vehicle else "具体车型和车系需要结合实时车源确认。"
         return f"{subject}具体在库车源会实时变化，建议由顾问为您确认当前库存。您可以先说下预算、年份、里程或配置偏好，我帮您整理需求。"
     if "contact_request" in risk_flags:
-        return "您也可以继续在这里告诉我预算和车型偏好，我先帮您整理需求。涉及联系方式或进一步沟通方式，建议由顾问人工确认后回复。"
+        return _build_scene_safe_fallback(
+            latest_message=latest_message,
+            scene="MERCHANT_CONTACT_REQUEST",
+            contact_state=contact_state,
+            store_address=store_address,
+        )
+    if "location" in risk_flags:
+        return _build_scene_safe_fallback(
+            latest_message=latest_message,
+            scene="STORE_LOCATION",
+            contact_state=contact_state,
+            store_address=store_address,
+        )
     # P0-V3.1：金融/价格 fallback 分开，短句留资承接（不再是旧长模板）
     if "finance_or_loan" in risk_flags:
-        return "老板这个不太方便在这里说，你留个联系方式我+你"
+        return _build_scene_safe_fallback(
+            latest_message=latest_message,
+            scene="FINANCE_DETAIL",
+            contact_state=contact_state,
+            store_address=store_address,
+        )
     if "price_or_discount" in risk_flags:
-        return "老板，这里不方便展开，留个联系方式我+你"
+        return _build_scene_safe_fallback(
+            latest_message=latest_message,
+            scene="PRICE_DETAIL",
+            contact_state=contact_state,
+            store_address=store_address,
+        )
     if "vehicle_condition_specific" in risk_flags:
         return "车况、事故记录、里程和手续信息需要结合具体车辆核验，建议由顾问人工确认后回复。您可以先说下关注的车型、预算和配置偏好，我帮您整理需求。"
     if "legal_or_transfer" in risk_flags or "after_sales_or_complaint" in risk_flags:

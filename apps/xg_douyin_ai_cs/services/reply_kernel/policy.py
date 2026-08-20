@@ -26,12 +26,37 @@ _FINANCE_INQUIRY_KEYWORDS = (
     "多少期", "贷款年限", "金融方案", "金融", "贷款保险", "保险怎么算",
 )
 _PRICE_INQUIRY_KEYWORDS = (
-    "多少钱", "什么价", "报价", "最低多少", "底价", "能便宜", "便宜多少",
+    "价格", "多少钱", "什么价", "报价", "最低多少", "底价", "能便宜", "便宜多少",
     "落地多少", "裸车价", "成交价", "一口价", "优惠多少", "还能优惠", "可以优惠",
 )
 
 # 预算事实保护：客户陈述自己预算（"我预算20万""20万左右"）不是向 AI 索价
 _BUDGET_FACT_MARKERS = ("预算", "左右", "上下", "大概", "差不多")
+
+_STORE_LOCATION_KEYWORDS = (
+    "店在哪", "店铺在哪", "地址在哪", "在哪里", "位置", "定位", "怎么导航", "怎么走",
+)
+_MERCHANT_CONTACT_KEYWORDS = (
+    "你的联系方式", "你们的联系方式", "你微信多少", "你电话多少", "怎么联系你",
+    "如何联系你", "怎么加你", "给我个联系方式", "发一下你的联系方式", "发你联系方式",
+    "电话多少", "微信多少", "怎么联系", "如何联系",
+)
+
+
+def classify_scene(latest_message: str, *, contact_state: str = "NONE", store_address: str = "") -> str:
+    """按业务优先级确定当前场景，避免 ContactState 覆盖客户问题语义。"""
+    text = str(latest_message or "")
+    if any(keyword in text for keyword in _STORE_LOCATION_KEYWORDS):
+        return "STORE_LOCATION"
+    if any(keyword in text for keyword in _MERCHANT_CONTACT_KEYWORDS):
+        return "MERCHANT_CONTACT_REQUEST"
+    if any(keyword in text for keyword in _FINANCE_INQUIRY_KEYWORDS):
+        return "FINANCE_DETAIL"
+    if _is_off_platform_request(text) and any(keyword in text for keyword in _PRICE_INQUIRY_KEYWORDS):
+        return "PRICE_DETAIL"
+    if contact_state in ("PARTIAL", "INVALID", "AMBIGUOUS"):
+        return "CONTACT_COMPLETION"
+    return "GENERAL_INQUIRY"
 
 
 def _is_off_platform_request(latest_message: str) -> bool:
@@ -100,6 +125,7 @@ class ReplyPolicyDecision:
     delivery_mode: str  # SINGLE_MESSAGE
     max_messages: int  # 1
     policy_reason_codes: list[str] = field(default_factory=list)
+    scene: str = "GENERAL_INQUIRY"
 
 
 def decide(
@@ -141,9 +167,16 @@ def decide(
 
     # 称呼：P0-B 无 gender 字段，默认"老板"
     salutation = "老板"
+    scene = classify_scene(
+        ctx.latest_customer_message,
+        contact_state=ctx.contact_state,
+        store_address=ctx.store_address,
+    )
 
     # primary_action：资料/报价场景 → OFF_PLATFORM_DETAIL_HANDOFF
-    if _is_off_platform_request(ctx.latest_customer_message):
+    if scene in {"PRICE_DETAIL", "FINANCE_DETAIL", "MERCHANT_CONTACT_REQUEST"} or (
+        scene == "GENERAL_INQUIRY" and _is_off_platform_request(ctx.latest_customer_message)
+    ):
         primary = "OFF_PLATFORM_DETAIL_HANDOFF"
     else:
         primary = "ANSWER_QUESTION"
@@ -170,4 +203,5 @@ def decide(
         delivery_mode="SINGLE_MESSAGE",
         max_messages=1,
         policy_reason_codes=_reason_codes(ctx, may_full_request, may_completion),
+        scene=scene,
     )

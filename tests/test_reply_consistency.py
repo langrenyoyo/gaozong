@@ -15,7 +15,7 @@ def test_prompt_template_hash_is_stable_and_short():
 
 
 def test_prompt_and_rag_policy_version_constants():
-    assert rds.PROMPT_VERSION == "v2.0"
+    assert rds.PROMPT_VERSION == "v3.1"
     assert rds.RAG_POLICY_VERSION == "unified_kb_v1"
 
 
@@ -46,7 +46,7 @@ def test_observability_fields_present():
         rag_used=True, llm_call_count=1, reply_text="您好，欢迎咨询。有什么可以帮您？",
         llm_primary_ms=120, llm_retry_ms=None,
     )
-    assert fields["prompt_version"] == "v2.0"
+    assert fields["prompt_version"] == "v3.1"
     assert fields["llm_call_count"] == 1
     assert fields["reply_char_count"] == len("您好，欢迎咨询。有什么可以帮您？")
     assert fields["reply_question_count"] == 1  # 一个问号

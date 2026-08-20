@@ -42,6 +42,8 @@ class ReplyContext:
     agent_phone_goal: bool = False
     scene_suitable_for_lead: bool = True
     customer_refused_lead: bool = False
+    # 商家事实只用于确定性场景路由，不进入对外契约。
+    store_address: str = ""
     # 客户事实（可选，P0-B 仅透传 known_customer 已有字段）
     known_customer_info: dict[str, Any] | None = None
 

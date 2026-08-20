@@ -287,12 +287,12 @@ def test_acceptance_insurance_boundary():
 def test_acceptance_contact_state_valid_no_repeat():
     """13.已留有效联系方式后再问价格 → ContactState VALID 不重复索要（强断言）。
 
-    F-1 修复验证：VALID+handoff 时约束应为承接（安排同事核实）而非索要联系方式。
+    R1 修复验证：VALID+handoff 时约束应按价格/金融场景承接，而非统一核实话术。
     """
     # 模板层：金融/价格 handoff 含 VALID 条件分支
     s = _skeleton()
     assert "VALID（已留联系方式）时不索要联系方式" in s
-    assert "我让同事核实后联系您" in s
+    assert "具体价格我让同事帮您核一下" in s
     assert "VALID 时不索要联系方式" in s
 
     # constraint 层：ENABLED 模式 VALID handoff 约束为承接
@@ -305,7 +305,7 @@ def test_acceptance_contact_state_valid_no_repeat():
         may_request_contact_completion=None, delivery_mode="SINGLE_MESSAGE", max_messages=1,
     )
     constraint = _build_decision_constraint_text(d_valid_handoff)
-    assert "安排同事核实后联系客户" in constraint, "VALID handoff constraint 应承接"
+    assert "客户已留联系方式" in constraint and "安排同事承接" in constraint, "VALID handoff constraint 应承接"
     assert "不得再次索要联系方式" in constraint
     assert "留个联系方式后再沟通" not in constraint, "VALID handoff 不应含留资引导"
 
@@ -337,18 +337,18 @@ def test_non_valid_handoff_constraint_solicits_contact():
         may_request_contact_completion=None, delivery_mode="SINGLE_MESSAGE", max_messages=1,
     )
     text = _build_decision_constraint_text(d)
-    assert "留个联系方式后再沟通" in text, "非VALID handoff 应引导留资"
+    assert "引导客户留联系方式后再沟通" in text, "非VALID handoff 应引导留资"
 
 
 def test_merchant_contact_segment_valid_no_solicit():
     """F-1 C5 修复：商家联系方式段 VALID 条件化。
 
-    VALID 客户问'怎么联系'→ 承接'我让同事核实后联系您'，不提'留个联系方式'。
+    VALID 客户问'怎么联系'→ 承接'我让同事和您对接'，不提'留个联系方式'。
     """
     s = _skeleton()
     # 商家联系方式段含 VALID 条件分支
     assert "VALID（已留联系方式）时不索要联系方式" in s
-    assert "我让同事核实后联系您" in s
+    assert "我让同事和您对接" in s
     # 非 VALID 仍引导留资
     assert "这里不太方便直接发，你留个联系方式我+你" in s
 
@@ -356,11 +356,11 @@ def test_merchant_contact_segment_valid_no_solicit():
 def test_address_empty_segment_valid_no_solicit():
     """F-1 C7 修复：地址空分支 VALID 条件化。
 
-    VALID 客户问'发个定位'（地址空）→ 承接'我让同事把地址发您'，不提'留个联系方式'。
+    VALID 客户问'发个定位'（地址空）→ 承接'我让同事把位置发您'，不提'留个联系方式'。
     """
     s = _skeleton()
     # 地址空分支含 VALID 条件
     assert "VALID 时不索要联系方式" in s
-    assert "我让同事把地址发您" in s
+    assert "我让同事把位置发您" in s
     # 非 VALID 仍引导留资
     assert "你留个联系方式，我发你" in s
