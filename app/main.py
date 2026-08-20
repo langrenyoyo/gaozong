@@ -54,6 +54,7 @@ from app.routers import (
     daily_report_deliveries,
     admin_debug,
     health,
+    wecom_callback,
 )
 
 # Windows 专用路由：依赖 comtypes / uiautomation，Linux/Docker 环境跳过
@@ -162,6 +163,7 @@ def create_app() -> FastAPI:
     app.include_router(daily_report_deliveries.router)
     app.include_router(admin_debug.router)
     app.include_router(health.router)
+    app.include_router(wecom_callback.router)
 
     # Windows 专用路由（微信 UI 自动化，Linux/Docker 不可用）
     if _WINDOWS_ROUTERS_AVAILABLE:

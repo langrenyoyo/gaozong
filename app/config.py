@@ -330,6 +330,13 @@ LEGACY_WECHAT_DEBUG_ENDPOINTS_ENABLED = (
     os.getenv("LEGACY_WECHAT_DEBUG_ENDPOINTS_ENABLED", "false").strip().lower() == "true"
 )
 
+# ---------- 企业微信第三方应用回调配置（P0 Probe） ----------
+# secret 只从环境注入，不进 Git / 日志 / API / docs；配置缺失时回调 fail-closed。
+# 值由 Owner 在部署环境注入（merchant.xiaogaoai.cn 生产回调）。
+WECOM_CALLBACK_TOKEN = os.getenv("WECOM_CALLBACK_TOKEN", "").strip()
+WECOM_CALLBACK_ENCODING_AES_KEY = os.getenv("WECOM_CALLBACK_ENCODING_AES_KEY", "").strip()
+WECOM_SUITE_ID = os.getenv("WECOM_SUITE_ID", "").strip()
+
 def is_production_env() -> bool:
     """判断当前是否为生产环境。"""
     return APP_ENV == "production"
