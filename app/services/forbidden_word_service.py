@@ -135,6 +135,36 @@ def load_forbidden_words_for_llm(db: Session) -> list[str]:
     return words
 
 
+def check_words_in_library(db: Session, *, library_key: str, content: str) -> list[str]:
+    """按指定词库独立检测命中词（跨库同词不去重）。
+
+    P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1：prohibited_auto_reply 与 finance_compliance
+    等词库可能含相同词条（如"黑户"），check_forbidden_words 的跨库 casefold 去重会
+    让同词只保留一个库的命中，导致本库命中丢失。pre-LLM 阻断必须按词库独立检测。
+    """
+    content_text = content if content is not None else ""
+    if not content_text.strip():
+        return []
+    active = _load_active_words(db)
+    words = [
+        (word.word or "").strip()
+        for word, lib in active
+        if (lib.library_key or "") == library_key and (word.word or "").strip()
+    ]
+    if not words:
+        return []
+    ordered = sorted(set(words), key=lambda s: (-len(s), s))
+    pattern = re.compile("|".join(re.escape(w) for w in ordered), flags=re.IGNORECASE)
+    matched: list[str] = []
+    seen: set[str] = set()
+    for match in pattern.finditer(content_text):
+        word = match.group(0)
+        if word.casefold() not in seen:
+            seen.add(word.casefold())
+            matched.append(word)
+    return matched
+
+
 def check_forbidden_words(
     db: Session,
     *,

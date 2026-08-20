@@ -13,7 +13,7 @@ from app import config
 from app.models import AiAgent, AiAutoReplyRun, DouyinAccountAgentBinding, DouyinAccountAutoreplySetting
 from app.services.conversation_autopilot_state_service import evaluate_manual_takeover_gate
 from app.services.autoreply_admin_rollout_service import evaluate_db_rollout_gate
-from app.services.forbidden_word_service import check_forbidden_words
+from app.services.forbidden_word_service import check_forbidden_words, check_words_in_library
 from app.services.douyin_autoreply_settings_service import (
     parse_allowed_intents,
     parse_blocked_risk_flags,
@@ -82,13 +82,18 @@ def _evaluate_prohibited_auto_reply(
     if not content:
         return None
     try:
-        result = check_forbidden_words(
+        # 审计保留（L3 约束）：普通违禁词命中日志 / hit_count 是既有必需行为，
+        # 不因分类检测而丢失（check_forbidden_words 只检测/审计，不替换、不影响阻断判定）。
+        check_forbidden_words(
             db,
             merchant_id=merchant_id,
             source="douyin_ai_auto_reply_pre_llm",
             content=content,
             context={"context_type": "conversation", "context_id": conversation_short_id},
         )
+        # 阻断判定：独立按 prohibited_auto_reply 词库检测（跨库同词不去重，
+        # 避免与 finance_compliance 的"黑户"等冲突导致专用分类命中丢失）。
+        matched = check_words_in_library(db, library_key="prohibited_auto_reply", content=content)
     except Exception as exc:  # noqa: BLE001  词库检测异常不阻断正常自动回复（fail-open + 记录）
         logger.warning(
             "pre_llm_prohibited_check_error merchant_id=%s conversation_short_id=%s "
@@ -98,8 +103,7 @@ def _evaluate_prohibited_auto_reply(
             type(exc).__name__,
         )
         return None
-    block_hits = [hit for hit in result.hits if hit.library_key == "prohibited_auto_reply"]
-    if not block_hits:
+    if not matched:
         return None
     return GateDecision(
         False,
@@ -109,7 +113,7 @@ def _evaluate_prohibited_auto_reply(
             **gate_results,
             "prohibited_auto_reply": {
                 "blocked": True,
-                "matched_words": [hit.word for hit in block_hits],
+                "matched_words": matched,
             },
         },
     )

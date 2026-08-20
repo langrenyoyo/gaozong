@@ -2340,3 +2340,82 @@ def test_multiple_rounds_no_state_pollution(monkeypatch):
             assert state.manual_takeover_until is None, "prohibited 命中不得触发人工接管"
     finally:
         db.close()
+
+
+def test_cross_library_same_word_still_blocks(monkeypatch):
+    """跨库同词（finance_compliance 黑户 + prohibited_auto_reply 黑户）→ 仍按 prohibited 阻断。
+
+    回归 P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1 修复：check_forbidden_words 的跨库 casefold
+    去重会让"黑户"只保留一个库命中，导致 prohibited 命中丢失；独立按词库检测不受影响。
+    """
+    from app.models import ForbiddenWord, ForbiddenWordLibrary
+
+    _seed_prohibited_auto_reply_words()
+    # 制造 finance_compliance 含"黑户"（与 prohibited 同词，模拟生产 403 seed 数据）
+    db = TestSession()
+    try:
+        lib = db.query(ForbiddenWordLibrary).filter_by(library_key="finance_compliance").first()
+        if lib is None:
+            lib = ForbiddenWordLibrary(
+                library_key="finance_compliance",
+                name="金融合规",
+                description="",
+                scope="global",
+                enabled=True,
+                sort_order=0,
+            )
+            db.add(lib)
+            db.flush()
+        exists = db.query(ForbiddenWord).filter_by(library_id=lib.id, word="黑户").first()
+        if exists is None:
+            db.add(
+                ForbiddenWord(
+                    library_id=lib.id,
+                    word="黑户",
+                    safe_word=None,
+                    severity="critical",
+                    enabled=True,
+                    hit_count=0,
+                )
+            )
+            db.commit()
+    finally:
+        db.close()
+
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True)
+    fake_client = FakeAiCsClient()
+    _run_one_auto_reply("我是黑户", event_key="ev-cross-lib", server_message_id="msg-cross-lib", fake_client=fake_client)
+
+    run = _latest_run()
+    assert run.status == "blocked"
+    assert run.block_reason == "prohibited_auto_reply_input"
+    gate_results = json.loads(run.gate_results_json)
+    assert gate_results["pre_llm"]["prohibited_auto_reply"]["blocked"] is True
+    assert "黑户" in gate_results["pre_llm"]["prohibited_auto_reply"]["matched_words"]
+    assert fake_client.calls == [], "跨库同词时仍须 LLM=0"
+
+
+def test_prohibited_block_keeps_forbidden_audit_semantics(monkeypatch):
+    """prohibited 阻断仍保留 ForbiddenWordHitLog / hit_count 审计（不因分类检测丢失）。"""
+    from app.models import ForbiddenWord, ForbiddenWordHitLog
+
+    _seed_prohibited_auto_reply_words()
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True)
+    fake_client = FakeAiCsClient()
+    _run_one_auto_reply("我是黑户", event_key="ev-audit", server_message_id="msg-audit", fake_client=fake_client)
+
+    run = _latest_run()
+    assert run.status == "blocked"
+    assert run.block_reason == "prohibited_auto_reply_input"
+    db = TestSession()
+    try:
+        logs = db.query(ForbiddenWordHitLog).filter(ForbiddenWordHitLog.merchant_id == "merchant-1").all()
+        assert logs, "prohibited 命中应写 ForbiddenWordHitLog 审计"
+        assert any("黑户" in (log.word or "") for log in logs), "审计应含命中的黑户词"
+        word = db.query(ForbiddenWord).filter(ForbiddenWord.word == "黑户").first()
+        assert word is not None
+        assert word.hit_count >= 1, "hit_count 应累计（不因分类检测丢失）"
+    finally:
+        db.close()
