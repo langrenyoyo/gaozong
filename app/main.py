@@ -231,6 +231,17 @@ def create_app() -> FastAPI:
         ).start()
         logger.info("回访崩溃恢复一次性线程已启动（return-visit-recovery-once）")
 
+        # M06 LAS：启动一次性恢复因进程重启中断的 LAS 轮询（daemon 线程，不阻塞应用启动）。
+        # 复用 return_visit 单飞模式；把 heartbeat 超时的 processing 任务重新 process_las_job，
+        # 首次 poll 即读到 LAS 终态并正确落库，自愈“生成中卡死”。
+        from app.services.ai_edit_las_service import resume_stale_las_jobs
+        threading.Thread(
+            target=resume_stale_las_jobs,
+            name="las-poll-recovery-once",
+            daemon=True,
+        ).start()
+        logger.info("LAS 轮询崩溃恢复一次性线程已启动（las-poll-recovery-once）")
+
         # AI 自动回复 outbox 调度器（默认关闭，AI_AUTO_REPLY_OUTBOX_ENABLED=true 启动）
         from app.services.ai_auto_reply_outbox_service import start_outbox_scheduler
         start_outbox_scheduler()

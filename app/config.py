@@ -434,6 +434,12 @@ LAS_MAX_WAIT_SECONDS = int(os.getenv("LAS_MAX_WAIT_SECONDS", "1800").strip() or 
 LAS_TOS_PRESIGN_EXPIRES_SECONDS = int(
     os.getenv("LAS_TOS_PRESIGN_EXPIRES_SECONDS", str(60 * 60 * 24 * 7)).strip() or str(60 * 60 * 24 * 7)
 )
+# 启动时恢复中断 LAS 轮询的 stale 心跳阈值（秒）。
+# LAS 轮询用进程内 BackgroundTasks 线程，进程重启会丢失；恢复扫描只重入队 heartbeat 超过
+# 该阈值（或从未写心跳）的 processing 任务。轮询间隔默认 15s，正常心跳频繁，120s 足够安全。
+LAS_RESUME_STALE_SECONDS = int(
+    os.getenv("LAS_RESUME_STALE_SECONDS", "120").strip() or "120"
+)
 # TOS 对象存储凭证（素材上传 + 产物长期保存）
 TOS_ACCESS_KEY = os.getenv("TOS_ACCESS_KEY", "").strip()
 TOS_SECRET_KEY = os.getenv("TOS_SECRET_KEY", "").strip()

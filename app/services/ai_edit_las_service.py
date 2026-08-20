@@ -17,12 +17,14 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import requests
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app import config
@@ -351,6 +353,8 @@ def create_las_job(
         stage="submitted",
         progress=0,
         attempt_count=1,
+        # 提交即写心跳：启动恢复扫描只重入队心跳超时/缺失的任务，避免把刚提交的新任务误判为 stale
+        heartbeat_at=datetime.now(),
         # 持久化完整规范化请求，失败后可回溯（input_json 为 jsonb 列）。
         # idempotent_id 继续用专用字段 las_idempotent_id，不重复写入 input_json。
         input_json=json.dumps(
@@ -395,11 +399,13 @@ def process_las_job(job_id: int) -> None:
             return
 
         client = get_las_speech_auto_client()
-        # 进度回写（非终态时更新 stage）
+        # 进度回写（非终态时更新 stage + 心跳）
         def _on_progress(status: str) -> None:
             try:
                 job.stage = status.lower() if status else "running"
                 job.las_metadata_json = str({"task_status": status})
+                # 心跳证明轮询线程存活；启动恢复扫描据此区分“线程已死”与“LAS 仍在生成”
+                job.heartbeat_at = datetime.now()
                 db.commit()
             except Exception:  # noqa: BLE001 进度回写失败不阻断轮询
                 db.rollback()
@@ -468,6 +474,63 @@ def process_las_job(job_id: int) -> None:
         logger.error("ai_edit_las_process_error job_id=%s error_type=%s", job_id, type(exc).__name__, exc_info=True)
     finally:
         db.close()
+
+
+# 模块级非阻塞锁：保证 LAS 恢复扫描单飞（启动线程 + 手动调用互斥）
+_RESUME_LOCK = threading.Lock()
+
+
+def resume_stale_las_jobs() -> None:
+    """启动一次性恢复：重新轮询因进程重启而中断的 LAS 任务（单飞，不阻塞调用方）。
+
+    背景：LAS 轮询用进程内 BackgroundTasks 线程，进程重启（部署 recreate/崩溃）会丢失在途
+    轮询线程，任务永久停在 processing 且不会超时失败。本函数在服务启动时扫描
+    status=processing 且 las_task_id 存在、且心跳缺失或超时（thread 已死）的任务，串行重新
+    process_las_job——wait_for_terminal 首次 poll 即读到 LAS 终态并正确落库（COMPLETED 存产物 /
+    FAILED 写失败码），从而自愈“生成中卡死”。
+
+    复用 return_visit_reconcile 模式：模块级锁单飞、自管 Session、只处理启动时存在的快照；
+    不建周期线程、不 sleep、不轮询。阈值 LAS_RESUME_STALE_SECONDS（默认 120s）远大于轮询
+    间隔（15s），正常心跳不会误判。
+    """
+    if not _RESUME_LOCK.acquire(blocking=False):
+        logger.info("ai_edit_las_resume stage=single_flight_skip")
+        return
+    try:
+        from app.database import SessionLocal
+
+        cutoff = datetime.now() - timedelta(seconds=config.LAS_RESUME_STALE_SECONDS)
+        db = SessionLocal()
+        try:
+            stale = (
+                db.query(AiEditJob)
+                .filter(
+                    AiEditJob.status == "processing",
+                    AiEditJob.las_task_id.isnot(None),
+                    or_(
+                        AiEditJob.heartbeat_at.is_(None),
+                        AiEditJob.heartbeat_at < cutoff,
+                    ),
+                )
+                .order_by(AiEditJob.id.asc())
+                .all()
+            )
+            job_ids = [j.id for j in stale]
+        finally:
+            db.close()
+
+        if not job_ids:
+            logger.info("ai_edit_las_resume stage=no_stale")
+            return
+        logger.warning("ai_edit_las_resume stage=resuming count=%s job_ids=%s", len(job_ids), job_ids)
+        # 串行恢复：wait_for_terminal 阻塞本 daemon 线程直至终态/超时；stale 任务通常极少
+        for job_id in job_ids:
+            try:
+                process_las_job(job_id)
+            except Exception:  # noqa: BLE001 单个任务恢复失败不阻断其余
+                logger.exception("ai_edit_las_resume job_id=%s error_type=unexpected", job_id)
+    finally:
+        _RESUME_LOCK.release()
 
 
 def _job_render_video(db: Session, job: AiEditJob) -> bool:
