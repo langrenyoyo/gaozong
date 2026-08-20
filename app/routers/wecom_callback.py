@@ -111,17 +111,20 @@ async def callback_verify(
 ) -> PlainTextResponse:
     """企业微信后台保存回调 URL 时的 GET 验证（URL Verification）。
 
-    要求：参数完整 → 验签（签名用 echostr 密文参与）→ AES 解密 → 校验 receiveid
-    == suite_id → 原样返回解密明文（纯文本，无任何包装）。
+    要求：参数完整 → 验签（签名用 echostr 密文参与）→ AES 解密 → 原样返回解密明文
+    （纯文本，无任何包装）。
+
+    注意：企微 verifyURL 的 echostr 加密 receiveid 是 corpid（实测 wwaa...），不是
+    suite_id（suite_ticket 推送才用 suite_id）；因此本场景协议上无法按 suite_id 校验
+    （任务书：suite identity mismatch 仅在协议能够验证时校验）。来源可信由
+    msg_signature 验签保证——只有持有 Token 的企微后台才能通过验签。
     """
     stage = "wecom.callback.get"
     try:
-        token, aes_key, suite_id = _load_wecom_config()
+        token, aes_key, _suite_id = _load_wecom_config()
         if not crypto.verify_signature(token, timestamp, nonce, echostr, msg_signature):
             raise WeComCallbackError("signature_invalid")
-        msg, receiveid = crypto.decrypt_message(echostr, aes_key)
-        if receiveid != suite_id:
-            raise WeComCallbackError("suite_mismatch")
+        msg, _receiveid = crypto.decrypt_message(echostr, aes_key)
         try:
             plaintext = msg.decode("utf-8")
         except Exception as exc:  # noqa: BLE001

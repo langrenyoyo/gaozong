@@ -134,14 +134,18 @@ def test_get_missing_query_param_fail_closed(client, wecom_cfg):
     assert r.status_code == 422
 
 
-def test_get_suite_identity_mismatch_fail_closed(client, wecom_cfg):
-    encrypt = _encrypt(b"echo", AES_KEY, "another-corp-id")  # receiveid 不匹配
+def test_get_verifyurl_receiveid_not_suite_id_still_returns_plaintext(client, wecom_cfg):
+    """企微 verifyURL 的 echostr 加密 receiveid 是 corpid（非 suite_id），协议上无法按
+    suite_id 校验；来源可信由 msg_signature 验签保证，故 receiveid 不匹配仍返回明文。"""
+    plaintext = "verify_ok"
+    encrypt = _encrypt(plaintext.encode(), AES_KEY, "wwaa-corpid-not-suite")  # receiveid 为 corpid
     sig = _sign(TOKEN, TS, NONCE, encrypt)
     r = client.get(
         "/integrations/wecom/callback",
         params={"msg_signature": sig, "timestamp": TS, "nonce": NONCE, "echostr": encrypt},
     )
-    assert r.status_code == 400
+    assert r.status_code == 200
+    assert r.content.decode() == plaintext
 
 
 def test_get_config_missing_fail_closed(client, monkeypatch):
