@@ -926,7 +926,11 @@ def search_with_diagnostics(
 ) -> RagSearchResult:
     # P1 Stage 5H-2：execution 在 embedding worker 启动前 durable commit（RQ-0）。
     # 统一入口创建，primary 与 fallback 复用同一 execution_id（不在 _search_sqlite 内创建）。
-    execution_id = _create_search_execution(payload.merchant_id, payload.query)
+    # P1-RAG-COMPUTE-BILLING-MERCHANT-SEPARATION-R1：execution 归属写入实际消费商户
+    # （billing_merchant_id），而非公共知识库 scope merchant（xiaogao_base）。
+    # billing_merchant_id 为空 = 非计费场景（search-preview 等），不建 execution、不上报。
+    billing_id = payload.billing_merchant_id
+    execution_id = _create_search_execution(billing_id, payload.query) if billing_id else None
     try:
         if settings.rag_vector_backend == "milvus":
             result = _search_milvus_or_fallback_with_diagnostics(
@@ -1149,10 +1153,14 @@ def _search_milvus_or_fallback_with_diagnostics(
     query_embedding = None  # 预初始化，供 except 分支安全引用
     try:
         client = llm_client or OpenAICompatibleClient()
+        # R1：embedding 上报 merchant 用实际消费商户（billing_merchant_id），非 scope merchant。
+        # billing 为空（非计费）→ merchant=None（不上报）+ stage=None（不构造 query identity，避免 partial warning）。
+        billing_id = payload.billing_merchant_id
         query_embedding_payload = _run_embed_with_hard_timeout(
-            client=client, text=payload.query, merchant_id=payload.merchant_id,
+            client=client, text=payload.query, merchant_id=billing_id,
             remark="knowledge_search",
-            search_execution_id=execution_id, embedding_stage="primary",
+            search_execution_id=execution_id,
+            embedding_stage="primary" if billing_id else None,
         )
         query_embedding = _coerce_embedding(query_embedding_payload.get("embedding"))
         if not query_embedding:
@@ -1269,10 +1277,14 @@ def _search_sqlite(
     try:
         if query_embedding is None:
             client = llm_client or OpenAICompatibleClient()
+            # R1：与 primary 一致，上报 merchant 用 billing_merchant_id（实际消费商户）。
+            # billing 为空 → merchant=None（不上报）+ stage=None（不构造 query identity）。
+            billing_id = payload.billing_merchant_id
             query_embedding_payload = _run_embed_with_hard_timeout(
-                client=client, text=payload.query, merchant_id=payload.merchant_id,
+                client=client, text=payload.query, merchant_id=billing_id,
                 remark="knowledge_search",
-                search_execution_id=execution_id, embedding_stage=embedding_stage,
+                search_execution_id=execution_id,
+                embedding_stage=embedding_stage if billing_id else None,
             )
             query_embedding = _coerce_embedding(query_embedding_payload.get("embedding"))
     except Exception as exc:

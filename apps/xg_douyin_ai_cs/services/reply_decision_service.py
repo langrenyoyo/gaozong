@@ -718,19 +718,33 @@ def build_reply_suggestion(
     source_chunks = []
     fallback_reason = None
     if rag_enabled:
-        search_result = search_with_diagnostics(
-            RagSearchRequest(
-                tenant_id="xiaogao_system",
-                merchant_id="xiaogao_base",
-                douyin_account_id=UNIFIED_KB_DOUYIN_ACCOUNT_ID,
-                query=request.latest_message,
-                top_k=5,
-                category_keys=allowed_category_keys,
-                category_ids=allowed_category_ids,
+        # P1-RAG-COMPUTE-BILLING-MERCHANT-SEPARATION-R1：算力归属用实际消费商户（9000 可信上下文），
+        # 公共知识库检索 scope 仍为 xiaogao_base。billing 身份缺失 → fail-closed：绝不静默回落到
+        # xiaogao_base，记录 attribution failure 后跳过 RAG 计费路径（走 direct_llm 兜底）。
+        billing_merchant_id = (request.merchant_id or "").strip() or None
+        if not billing_merchant_id:
+            _logger.warning(
+                "reply_suggestion_rag stage=rag_attribution_failure tenant_id=%s "
+                "douyin_account_id=%s agent_id=%s（billing merchant 缺失，跳过 RAG 计费路径）",
+                request.tenant_id,
+                douyin_account_id,
+                request.agent_id,
             )
-        )
-        source_chunks = search_result.items
-        fallback_reason = search_result.diagnostics.fallback_reason
+        else:
+            search_result = search_with_diagnostics(
+                RagSearchRequest(
+                    tenant_id="xiaogao_system",
+                    merchant_id="xiaogao_base",
+                    billing_merchant_id=billing_merchant_id,
+                    douyin_account_id=UNIFIED_KB_DOUYIN_ACCOUNT_ID,
+                    query=request.latest_message,
+                    top_k=5,
+                    category_keys=allowed_category_keys,
+                    category_ids=allowed_category_ids,
+                )
+            )
+            source_chunks = search_result.items
+            fallback_reason = search_result.diagnostics.fallback_reason
     if source_chunks:
         return _dispatch_reply_with_kernel_mode(
             conversation_id=conversation_id,

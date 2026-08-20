@@ -73,6 +73,10 @@ class RagSearchRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20)
     category_ids: list[str] | None = None
     category_keys: list[str] | None = None
+    # P1-RAG-COMPUTE-BILLING-MERCHANT-SEPARATION-R1：算力归属与检索 scope 分离。
+    # merchant_id 仍为公共知识库检索 scope（xiaogao_base）；billing_merchant_id 为实际消费商户
+    # （9000 可信请求上下文），为空表示非计费场景（如 search-preview），不建 execution、不上报。
+    billing_merchant_id: str | None = None
 
 
 class RagSearchItem(BaseModel):
