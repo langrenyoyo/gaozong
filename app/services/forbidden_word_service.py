@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
@@ -58,6 +59,30 @@ _WECHAT_ACCOUNT_PATTERN = re.compile(
     r"(微信号|微信|wx|wechat)\s*[A-Za-z0-9_\-]{3,}",
     flags=re.IGNORECASE,
 )
+
+
+def _normalize_context_id_for_log(raw: object) -> str:
+    """forbidden_word_hit_logs.context_id（VARCHAR(64)）长度收敛，零 migration。
+
+    超长（>64）时用"可读前缀 + SHA-256 截段"编码压缩到 64 内：仅审计路径降级，
+    绝不因审计写入影响门禁判定与主链路（P0.5-DOUYIN-* 事故修复：context_id 曾为
+    base64 conversation_short_id 72 字符 → StringDataRightTruncation → 事务回滚）。
+    可观测：normalized 值落在列内；original_length / 完整 context_id_hash 落在 WARNING 日志。
+    """
+    raw_str = str(raw or "").strip()
+    if len(raw_str) <= 64:
+        return raw_str
+    prefix = raw_str[:40]
+    digest = hashlib.sha256(raw_str.encode("utf-8")).hexdigest()[:23]
+    normalized = f"{prefix}-{digest}"  # 40 + 1 + 23 = 64
+    logger.warning(
+        "forbidden_word_audit stage=context_id_truncated original_length=%d "
+        "context_id_hash=%s context_id_prefix=%s（审计降级不阻断业务）",
+        len(raw_str),
+        hashlib.sha256(raw_str.encode("utf-8")).hexdigest(),
+        prefix,
+    )
+    return normalized
 
 
 def summarize_replacement_text(text: object, *, max_len: int = 160) -> str:
@@ -244,7 +269,9 @@ def check_forbidden_words(
     # 写命中日志（每唯一词条一行）+ 累计 hit_count；只 flush 不 commit。
     ctx = context or {}
     context_type = _ctx_str(ctx.get("context_type"))
-    context_id = _ctx_str(ctx.get("context_id"))
+    # 审计保护（Emergency Hotfix）：context_id 列 VARCHAR(64)，超长收敛（前缀+SHA 截段），
+    # 只降级审计路径、不阻断业务；库内编码复用现有列，零 migration。
+    context_id = _normalize_context_id_for_log(_ctx_str(ctx.get("context_id")))
     before_summary = summarize_replacement_text(content_text)
     after_summary = summarize_replacement_text(content_text)
 
