@@ -55,6 +55,7 @@ from app.routers import (
     admin_debug,
     health,
     wecom_callback,
+    wecom_authorization,
 )
 
 # Windows 专用路由：依赖 comtypes / uiautomation，Linux/Docker 环境跳过
@@ -164,6 +165,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_debug.router)
     app.include_router(health.router)
     app.include_router(wecom_callback.router)
+    app.include_router(wecom_authorization.router)
 
     # Windows 专用路由（微信 UI 自动化，Linux/Docker 不可用）
     if _WINDOWS_ROUTERS_AVAILABLE:
@@ -258,6 +260,11 @@ def create_app() -> FastAPI:
             daemon=True,
         ).start()
         logger.info("LAS 轮询崩溃恢复一次性线程已启动（las-poll-recovery-once）")
+
+        # P1 企微：callback worker + 授权对账循环（仅 capability 启用时启动：
+        # WECOM_SUITE_SECRET + WECOM_CREDENTIAL_MASTER_KEY 均已配置，否则 skip + 503 降级）
+        from app.scheduler.wecom_scheduler import wecom_scheduler as wecom_scheduler_singleton
+        wecom_scheduler_singleton.start()
 
         # AI 自动回复 outbox 调度器（默认关闭，AI_AUTO_REPLY_OUTBOX_ENABLED=true 启动）
         from app.services.ai_auto_reply_outbox_service import start_outbox_scheduler

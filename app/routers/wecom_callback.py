@@ -21,6 +21,7 @@ from fastapi.responses import PlainTextResponse
 from app import config
 from app.integrations.wecom import crypto
 from app.integrations.wecom.crypto import WeComCallbackError
+from app.services import wecom_callback_service
 
 logger = logging.getLogger("wecom_callback_router")
 
@@ -28,8 +29,8 @@ logger = logging.getLogger("wecom_callback_router")
 # 外部 endpoint 保持 /api/integrations/wecom/callback（任务书指定，由反代剥离 /api 匹配）。
 router = APIRouter(prefix="/integrations/wecom", tags=["企业微信回调"])
 
-# P0 Probe 可识别事件：suite_ticket / create_auth / change_auth / cancel_auth
-_RECOGNIZED_INFO_TYPES = frozenset(
+# 指令类事件（receiveid 需 == suite_id）；数据类（template_card_event）按 ToUserName 解析 merchant
+_COMMAND_INFO_TYPES = frozenset(
     {"suite_ticket", "create_auth", "change_auth", "cancel_auth"}
 )
 
@@ -135,6 +136,16 @@ async def callback_verify(
     return PlainTextResponse(plaintext)
 
 
+def _to_int(value) -> int | None:
+    """事件 TimeStamp（秒）转 int；非法返回 None。"""
+    if value is None:
+        return None
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 @router.post("/callback", response_class=PlainTextResponse)
 async def callback_receive(
     request: Request,
@@ -142,11 +153,11 @@ async def callback_receive(
     timestamp: str = Query(...),
     nonce: str = Query(...),
 ) -> PlainTextResponse:
-    """企业微信指令/数据回调（suite_ticket / create_auth / change_auth / cancel_auth 等）。
+    """企业微信指令/数据回调（P1 Durable Inbox）。
 
-    验签 → AES 解密 → 校验 receiveid == suite_id → 解析最小事件 envelope → 识别事件
-    → 安全 metadata 日志 → ACK "success"。
-    签名/解密有效但事件类型不在 Probe 范围：ACK + IGNORED_UNSUPPORTED（猜语义、写业务一律禁止）。
+    验签 → AES 解密 → 指令类 receiveid==suite_id 校验（数据类按 ToUserName 解析 merchant）→
+    解析 envelope → 事件落库（幂等）→ ACK "success"。
+    签名/解密有效但未知事件 / 未知 corpid → 落库 IGNORED + ACK（§5.3 安全拒绝矩阵）。
     """
     stage = "wecom.callback.post"
     try:
@@ -156,26 +167,43 @@ async def callback_receive(
         if not crypto.verify_signature(token, timestamp, nonce, encrypt, msg_signature):
             raise WeComCallbackError("signature_invalid")
         msg, receiveid = crypto.decrypt_message(encrypt, aes_key)
-        if receiveid != suite_id:
-            raise WeComCallbackError("suite_mismatch")
         try:
             plaintext = msg.decode("utf-8")
         except Exception as exc:  # noqa: BLE001
             raise WeComCallbackError("invalid_plaintext", detail=str(exc)) from exc
         envelope = crypto.parse_envelope(plaintext)
-        # 内层 SuiteId 若存在且不匹配，同样 fail-closed（双保险，receiveid 已校验）
-        inner_suite_id = envelope.get("suite_id")
-        if inner_suite_id and inner_suite_id != suite_id:
-            raise WeComCallbackError("suite_mismatch")
-        if envelope.get("info_type") not in _RECOGNIZED_INFO_TYPES:
-            logger.info(
-                "wecom_callback stage=%s result=ignored_unsupported info_type=%s ts=%s",
-                stage,
-                envelope.get("info_type") or "unknown",
-                _safe_timestamp(),
+        info_type = envelope.get("info_type") or ""
+        # 指令类：receiveid == suite_id + 内层 SuiteId 双校验；数据类不按 suite_id 强校验
+        # （数据类 ToUserName 即密文 corpid，P0 实测 receiveid 为 corpid）
+        if info_type in _COMMAND_INFO_TYPES:
+            if receiveid != suite_id:
+                raise WeComCallbackError("suite_mismatch")
+            inner_suite_id = envelope.get("suite_id")
+            if inner_suite_id and inner_suite_id != suite_id:
+                raise WeComCallbackError("suite_mismatch")
+        # 事件落库（幂等 + 安全分类，§5.3）
+        extra = envelope.get("extra") or {}
+        try:
+            result = wecom_callback_service.receive_event(
+                info_type=info_type,
+                suite_id=envelope.get("suite_id"),
+                auth_corp_id=extra.get("AuthCorpId") or extra.get("ToUserName"),
+                from_user_name=extra.get("FromUserName"),
+                event_create_time=_to_int(envelope.get("timestamp")),
+                change_type=extra.get("ChangeType"),
+                extra=extra,
             )
-            return PlainTextResponse("success")
-        _log_event_metadata(stage, envelope)
+        except Exception as exc:  # noqa: BLE001  落库失败 → 服务端错误（企微重试）
+            logger.error(
+                "wecom_callback stage=%s result=inbox_failed ts=%s",
+                stage, _safe_timestamp(), exc_info=True,
+            )
+            return PlainTextResponse("internal error", status_code=500)
+        logger.info(
+            "wecom_callback stage=%s result=%s event_type=%s suite_id=%s ts=%s",
+            stage, result.get("result"), info_type or "unknown",
+            envelope.get("suite_id") or "-", _safe_timestamp(),
+        )
     except WeComCallbackError as exc:
         return _fail_closed(exc, stage)
     return PlainTextResponse("success")

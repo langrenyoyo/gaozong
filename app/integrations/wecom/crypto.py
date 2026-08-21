@@ -150,7 +150,10 @@ def parse_envelope(plaintext_xml: str) -> dict:
         return node.text.strip()
 
     extra: dict[str, str] = {}
-    for tag in ("SuiteTicket", "AuthCorpId", "ChangeType", "Event"):
+    for tag in (
+        "SuiteTicket", "AuthCorpId", "ChangeType", "Event",
+        "FromUserName", "ToUserName", "MsgType", "EventKey",
+    ):
         value = _text(tag)
         if value is not None:
             extra[tag] = value

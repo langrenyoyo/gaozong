@@ -341,6 +341,18 @@ WECOM_CALLBACK_TOKEN = os.getenv("WECOM_CALLBACK_TOKEN", "").strip()
 WECOM_CALLBACK_ENCODING_AES_KEY = os.getenv("WECOM_CALLBACK_ENCODING_AES_KEY", "").strip()
 WECOM_SUITE_ID = os.getenv("WECOM_SUITE_ID", "").strip()
 
+# ---------- 企业微信第三方应用 P1 凭证配置（SPEC v1.0 §4.3，全部 Owner 部署侧注入）----------
+# 高敏感：不进 Git / env example / release identity / 日志 / API；缺失时能力 fail-closed。
+WECOM_SUITE_SECRET = os.getenv("WECOM_SUITE_SECRET", "").strip()
+# 凭证加密主密钥（D1/Owner Decision-05）：AES-256-GCM，Owner 离线托管，缺失 → 能力 fail-closed。
+WECOM_CREDENTIAL_MASTER_KEY = os.getenv("WECOM_CREDENTIAL_MASTER_KEY", "").strip()
+# 主密钥版本（rotation 用，默认 "1"）
+WECOM_CREDENTIAL_MASTER_KEY_VERSION = os.getenv("WECOM_CREDENTIAL_MASTER_KEY_VERSION", "1").strip() or "1"
+# 授权对账频率（分钟，D8 默认 60，小时级）
+WECOM_AUTH_RECONCILE_INTERVAL_MINUTES = int(
+    os.getenv("WECOM_AUTH_RECONCILE_INTERVAL_MINUTES", "60").strip() or "60"
+)
+
 def is_production_env() -> bool:
     """判断当前是否为生产环境。"""
     return APP_ENV == "production"

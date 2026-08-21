@@ -61,7 +61,23 @@ def wecom_cfg(monkeypatch):
 
 
 @pytest.fixture
-def client():
+def client(wecom_cfg, monkeypatch):
+    """TestClient + 内存 SQLite 三表（P1 POST 落库需要 DB）。"""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from app.models import Base
+    from app.services import wecom_callback_service, wecom_credential_service
+    # StaticPool 共享单连接：TestClient 事件循环线程与主线程可见同一内存库
+    engine = create_engine(
+        "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    S = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    monkeypatch.setattr(wecom_callback_service, "SessionLocal", S)
+    monkeypatch.setattr(wecom_credential_service, "SessionLocal", S)
+    monkeypatch.setattr(config, "WECOM_CREDENTIAL_MASTER_KEY", "test-master-key")
+    monkeypatch.setattr(config, "WECOM_CREDENTIAL_MASTER_KEY_VERSION", "1")
     app = FastAPI()
     app.include_router(wecom_callback.router)
     return TestClient(app)

@@ -1945,3 +1945,89 @@ class ContactInvalidFollowupTask(Base):
     last_error = Column(Text)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+# ========== 企业微信第三方应用（P1，SPEC v1.0 §2.1~§2.3）==========
+
+class WeComSuiteRuntime(Base):
+    """服务商运行状态：suite_ticket 加密落库（只用最新值，覆盖更新）。"""
+
+    __tablename__ = "wecom_suite_runtime"
+    __table_args__ = (
+        UniqueConstraint("suite_id", name="uk_wecom_suite_runtime_suite_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    suite_id = Column(String(64), nullable=False, comment="服务商 suite_id")
+    suite_ticket_encrypted = Column(Text, nullable=False, comment="suite_ticket AES-256-GCM 加密（D1 主密钥）")
+    key_version = Column(Integer, nullable=False, default=1, comment="加密主密钥版本（D1 rotation）")
+    ticket_hash_prefix = Column(String(8), nullable=False, comment="SHA256(ticket) 前 8 位，日志脱敏对照")
+    received_at = Column(DateTime(timezone=True), nullable=False, comment="最近一次接收时间")
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now, onupdate=datetime.now)
+
+
+class WeComEnterpriseAuthorization(Base):
+    """企业授权事实：merchant 与授权企业（D13：auth_corp_id 服务商全局 1:1，禁止多 merchant 复用）。"""
+
+    __tablename__ = "wecom_enterprise_authorizations"
+    __table_args__ = (
+        CheckConstraint(
+            "authorization_status IN ('PENDING','FAILED','ACTIVE','CHANGED','CANCELLED','INVALID')",
+            name="ck_wecom_enterprise_authorizations_status",
+        ),
+        UniqueConstraint("auth_corp_id", name="uk_wecom_enterprise_authorizations_auth_corp_id"),
+        Index("idx_wecom_enterprise_authorizations_merchant", "merchant_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户（RequestContext / 持久化身份注入，生产为字符串如 m_nc_2bba00063cc13016）")
+    auth_corp_id = Column(String(64), nullable=False, comment="密文 corpid（服务商主体下全局稳定，wwaa 前缀 18 位）")
+    authorization_status = Column(
+        String(16), nullable=False, default="PENDING",
+        comment="状态机 PENDING/FAILED/ACTIVE/CHANGED/CANCELLED/INVALID",
+    )
+    permanent_code_encrypted = Column(Text, comment="permanent_code AES-256-GCM 加密（ACTIVE 后有值）")
+    key_version = Column(Integer, nullable=False, default=1, comment="加密主密钥版本")
+    agentid = Column(String(64), comment="get_auth_info 回填")
+    privilege = Column(_JSONStringJSONB(), comment="get_auth_info 可见范围 allow_user/allow_party/allow_tag")
+    state_hash = Column(String(64), comment="授权发起 state 的 SHA-256（防 CSRF，一次性）")
+    state_expires_at = Column(DateTime(timezone=True), comment="state 过期时间")
+    last_sync_at = Column(DateTime(timezone=True), comment="最近一次 get_auth_info 对账/同步时间")
+    authorized_at = Column(DateTime(timezone=True), comment="最近一次进入 ACTIVE 时间")
+    failure_reason = Column(String(64), comment="FAILED 原因分类（不存明文细节）")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now, onupdate=datetime.now)
+
+
+class WeComCallbackEvent(Base):
+    """Callback Durable Inbox 雏形：接收、去重、重试、审计（SPEC §2.3）。"""
+
+    __tablename__ = "wecom_callback_events"
+    __table_args__ = (
+        UniqueConstraint("provider_event_key", name="uk_wecom_callback_events_provider_event_key"),
+        CheckConstraint(
+            "status IN ('RECEIVED','PROCESSED','FAILED_RETRYABLE','FAILED_PERMANENT','IGNORED')",
+            name="ck_wecom_callback_events_status",
+        ),
+        Index("idx_wecom_callback_events_claim", "status", "next_attempt_at"),
+        Index("idx_wecom_callback_events_auth_corp", "auth_corp_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider_event_key = Column(String(255), nullable=False, comment="幂等键（SPEC §7.1 D7 口径）")
+    info_type = Column(String(32), nullable=False, comment="事件类型（含 change_auth 的 ChangeType 复合值）")
+    suite_id = Column(String(64), comment="事件内 SuiteId")
+    auth_corp_id = Column(String(64), comment="指令类 AuthCorpId / 数据类 ToUserName")
+    from_user_name = Column(String(128), comment="数据类 FromUserName")
+    event_create_time = Column(BigInteger, comment="事件 TimeStamp（秒）")
+    status = Column(
+        String(20), nullable=False, default="RECEIVED",
+        comment="RECEIVED/PROCESSED/FAILED_RETRYABLE/FAILED_PERMANENT/IGNORED",
+    )
+    failure_stage = Column(String(100), comment="失败/忽略阶段标识")
+    attempt_count = Column(Integer, nullable=False, default=0, comment="处理尝试次数")
+    lease_expires_at = Column(DateTime(timezone=True), comment="lease 过期时间（DB authoritative）")
+    next_attempt_at = Column(DateTime(timezone=True), comment="重试时间")
+    claimed_by = Column(String(100), comment="claim 时 worker 身份（hostname+pid）")
+    processed_at = Column(DateTime(timezone=True), comment="处理完成时间")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
