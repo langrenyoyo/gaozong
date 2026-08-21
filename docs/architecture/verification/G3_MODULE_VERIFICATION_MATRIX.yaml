@@ -61,10 +61,10 @@ modules:
         result: "8 passed / 20 errors（ENV tmp_path）"
       - id: M01-PRE-LLM-BLOCK-1
         path: tests/test_ai_auto_reply_dry_run.py::test_prohibited_auto_reply_blocks_current_message_before_llm
-        result: "PASS（P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1）：输入'我是黑户，能贷款吗'命中 prohibited_auto_reply → LLM=0（FakeAiCsClient.calls=[]）、SEND=0（DouyinPrivateMessageSend 无记录）、block_reason=prohibited_auto_reply_input、gate_results.pre_llm.prohibited_auto_reply.blocked=True、不改 conversation 状态；租户范围=merchant-1（全局词库 scope=global）"
+        result: "PASS（P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1）：输入'我是黑户，能贷款吗'命中 prohibited_auto_reply → LLM=0（FakeAiCsClient.calls=[]）、SEND=0（DouyinPrivateMessageSend 无记录）、block_reason=prohibited_auto_reply_input、gate_results.pre_llm.prohibited_auto_reply.blocked=True、不改 conversation 状态；租户范围=merchant-1（全局词库 scope=global）。PRODUCTION（运行 HEAD=c3c28f9，2026-08-21 受控测试账号）：输入'我是黑户'→ AiAutoReplyRun status=blocked / block_reason=prohibited_auto_reply_input / gate_results.pre_llm.prohibited_auto_reply={blocked:true, matched_words:[黑户]} / LLM_CALL=0（decision_log_id NULL）/ send_msg=0；词库 4 词条（黑户/老赖/我黑了/征信花了，severity=critical, scope=global）经 Q2 SQL 核验；受控痕迹已清理"
       - id: M01-PRE-LLM-RECOVERY-1
         path: tests/test_ai_auto_reply_dry_run.py::test_next_normal_message_recovers_after_prohibited_block
-        result: "PASS（P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1）：高风险消息后普通消息自动恢复 AI 链路（LLM 计数=1 仅普通消息；block_reason 不继承）；test_multiple_rounds_no_state_pollution（prohibited→normal→prohibited→normal）逐条独立 + test_finance_compliance_words_not_blocked_by_pre_llm（普通金融词不被误阻断）全 PASS"
+        result: "PASS（P0-DOUYIN-AUTO-REPLY-PRE-LLM-GATE-1）：高风险消息后普通消息自动恢复 AI 链路（LLM 计数=1 仅普通消息；block_reason 不继承）；test_multiple_rounds_no_state_pollution（prohibited→normal→prohibited→normal）逐条独立 + test_finance_compliance_words_not_blocked_by_pre_llm（普通金融词不被误阻断）全 PASS。PRODUCTION（运行 HEAD=c3c28f9，2026-08-21 受控测试账号）：连续'我是黑户'→'这个车多少钱'，第一条 blocked/prohibited_auto_reply_input（LLM=0），第二条 LLM_CALLED（进入正常 AI 链路，block_reason=account_send_disabled 为受控 send_enabled=false 预期）→ 前一条命中不污染下一条，message-level only 证明"
     manual_checks:
       - id: M01-MANUAL-1
         description: "真实抖音发送验收（staging，需审批）：preconditions=本机 PG（SMOKE_DATABASE_URL）+ 9100 真实 Ark LLM + 无 0o700 沙箱限制；steps=①真实 webhook 入站→自动回复决策→send gate 全链 ②人工接管后确认 AI 不继续自动回复 ③RAG ask 命中 Milvus 不跳过 ④M07 计费重放 NO_DOUBLE_CHARGE；expected=决策日志完整、gate_results 保留、无重复扣费；failure_signal=决策未产出/AI 绕过接管/计费重复；side_effect_warning=会真实发送抖音私信并扣费（测试账号）；cleanup=测试账号解绑+测试库清理"
