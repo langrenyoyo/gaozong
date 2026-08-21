@@ -14,7 +14,11 @@ import { dirname, join } from "node:path";
 
 import {
   MATERIAL_UPLOAD_TIMEOUT_MS,
+  MAX_MATERIAL_UPLOAD_BYTES,
+  MATERIAL_TOO_LARGE_TEXT,
   classifyUploadError,
+  isMaterialTooLarge,
+  isMaterialSizeLimitError,
   runUpload,
   summarizeUploadResults,
 } from "../src/features/ai-edit/uploadFeedback.ts";
@@ -47,7 +51,7 @@ test("T3 上传 resolve → success 计数 + 成功反馈 + 刷新列表", async
   const counts = await runUpload(["a", "b"], async (f) => {
     calls.push(String(f));
   });
-  assert.deepEqual(counts, { ok: 2, failed: 0, unknown: 0 });
+  assert.deepEqual(counts, { ok: 2, failed: 0, unknown: 0, tooLarge: 0 });
   const fb = summarizeUploadResults(counts);
   assert.match(fb.toastText ?? "", /已成功上传 2 个素材/);
   assert.equal(fb.errorText, null);
@@ -62,7 +66,7 @@ test("T4 timeout（ECONNABORTED，无 response）→ UNKNOWN，不得显示上�
   const counts = await runUpload(["a"], async () => {
     throw err;
   });
-  assert.deepEqual(counts, { ok: 0, failed: 0, unknown: 1 });
+  assert.deepEqual(counts, { ok: 0, failed: 0, unknown: 1, tooLarge: 0 });
   const fb = summarizeUploadResults(counts);
   assert.match(fb.errorText ?? "", /结果暂未确认/);
   assert.doesNotMatch(fb.errorText ?? "", /上传失败，请稍后重试/);
@@ -76,7 +80,7 @@ test("T5 network（无 response）→ UNKNOWN，不得断言失败", async () =>
   const counts = await runUpload(["a"], async () => {
     throw err;
   });
-  assert.deepEqual(counts, { ok: 0, failed: 0, unknown: 1 });
+  assert.deepEqual(counts, { ok: 0, failed: 0, unknown: 1, tooLarge: 0 });
   const fb = summarizeUploadResults(counts);
   assert.match(fb.errorText ?? "", /结果暂未确认/);
   assert.doesNotMatch(fb.errorText ?? "", /上传失败，请稍后重试/);
@@ -90,7 +94,7 @@ test("T6 HTTP 4xx（有 response）→ FAILED", async () => {
   const counts = await runUpload(["a"], async () => {
     throw err;
   });
-  assert.deepEqual(counts, { ok: 0, failed: 1, unknown: 0 });
+  assert.deepEqual(counts, { ok: 0, failed: 1, unknown: 0, tooLarge: 0 });
   const fb = summarizeUploadResults(counts);
   assert.equal(fb.errorText, "上传失败，请稍后重试");
 });
@@ -101,7 +105,7 @@ test("T7 多文件 success+timeout → 如实报告 success+unknown，不得显�
   const counts = await runUpload(["ok", "timeout"], async (f) => {
     if (String(f) === "timeout") throw { code: "ECONNABORTED" };
   });
-  assert.deepEqual(counts, { ok: 1, failed: 0, unknown: 1 });
+  assert.deepEqual(counts, { ok: 1, failed: 0, unknown: 1, tooLarge: 0 });
   const fb = summarizeUploadResults(counts);
   assert.match(fb.toastText ?? "", /已成功上传 1 个素材/);
   assert.match(fb.toastText ?? "", /1 个上传结果暂未确认/);
@@ -128,4 +132,77 @@ test("T9 全成功路径保持（成功提示 + 刷新 + 无 error）", async ()
   assert.match(fb.toastText ?? "", /已成功上传 1 个素材/);
   assert.equal(fb.errorText, null);
   assert.equal(fb.callLoad, true);
+});
+
+// ---------- T10：F1 大小前置校验（V1/V2）----------
+
+test("T10 499MB 放行、恰好 500MB 放行（边界）、501MB 阻断", () => {
+  assert.equal(MAX_MATERIAL_UPLOAD_BYTES, 500 * 1024 * 1024);
+  assert.equal(isMaterialTooLarge(499 * 1024 * 1024), false); // V1
+  assert.equal(isMaterialTooLarge(500 * 1024 * 1024), false); // 边界：严格大于才超限
+  assert.equal(isMaterialTooLarge(500 * 1024 * 1024 + 1), true);
+  assert.equal(isMaterialTooLarge(501 * 1024 * 1024), true); // V2
+});
+
+// ---------- T11：nginx 413 HTML mock（V3）----------
+
+test("T11 nginx 413 HTML → 分类 tooLarge + 固定友好文案（不展示 HTML/技术异常）", async () => {
+  const err = { response: { status: 413, data: "<html>413 Request Entity Too Large</html>" } };
+  assert.equal(isMaterialSizeLimitError(err), true);
+  const counts = await runUpload(["a"], async () => {
+    throw err;
+  });
+  assert.deepEqual(counts, { ok: 0, failed: 0, unknown: 0, tooLarge: 1 });
+  const fb = summarizeUploadResults(counts);
+  assert.equal(fb.errorText, MATERIAL_TOO_LARGE_TEXT);
+  assert.doesNotMatch(fb.errorText ?? "", /<html/);
+  assert.equal(fb.toastText, null);
+  assert.equal(fb.callLoad, false);
+});
+
+// ---------- T12：后端 FILE_TOO_LARGE mock（V4）----------
+
+test("T12 后端 FILE_TOO_LARGE 413 → 与 nginx 413 同一固定文案", async () => {
+  const err = {
+    response: { status: 413, data: { detail: { code: "FILE_TOO_LARGE", message: "文件不能超过 500MB" } } },
+  };
+  assert.equal(isMaterialSizeLimitError(err), true);
+  const counts = await runUpload(["a"], async () => {
+    throw err;
+  });
+  assert.deepEqual(counts, { ok: 0, failed: 0, unknown: 0, tooLarge: 1 });
+  const fb = summarizeUploadResults(counts);
+  assert.equal(fb.errorText, MATERIAL_TOO_LARGE_TEXT);
+  assert.doesNotMatch(fb.errorText ?? "", /FILE_TOO_LARGE/);
+  assert.equal(fb.toastText, null);
+  assert.equal(fb.callLoad, false);
+});
+
+// ---------- T13：混合（success + tooLarge，V6）----------
+
+test("T13 混合 success+tooLarge → toast 追加超限计数，仍刷新列表", async () => {
+  const counts = await runUpload(["ok", "big"], async (f) => {
+    if (String(f) === "big") throw { response: { status: 413, data: "<html>413</html>" } };
+  });
+  assert.deepEqual(counts, { ok: 1, failed: 0, unknown: 0, tooLarge: 1 });
+  const fb = summarizeUploadResults(counts);
+  assert.match(fb.toastText ?? "", /已成功上传 1 个素材/);
+  assert.match(fb.toastText ?? "", /1 个文件超过 500MB 未上传/);
+  assert.equal(fb.errorText, null);
+  assert.equal(fb.callLoad, true);
+});
+
+// ---------- T14：混合（failed + tooLarge，无成功，V6）----------
+
+test("T14 混合 failed+tooLarge 无成功 → error 文案末尾追加超限计数，不刷新", async () => {
+  const counts = await runUpload(["fail", "big"], async (f) => {
+    if (String(f) === "fail") throw { response: { status: 400, data: { detail: { message: "INVALID" } } } };
+    throw { response: { status: 413, data: "<html>413</html>" } };
+  });
+  assert.deepEqual(counts, { ok: 0, failed: 1, unknown: 0, tooLarge: 1 });
+  const fb = summarizeUploadResults(counts);
+  assert.match(fb.errorText ?? "", /上传失败，请稍后重试/);
+  assert.match(fb.errorText ?? "", /1 个文件超过 500MB 未上传/);
+  assert.equal(fb.toastText, null);
+  assert.equal(fb.callLoad, false);
 });

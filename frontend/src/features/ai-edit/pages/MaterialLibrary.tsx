@@ -14,7 +14,12 @@ import {
   UploadCloudIcon,
 } from "lucide-react";
 import { fetchAiEditMaterials, uploadMaterialToTos, deleteMaterial, reanalyzeMaterial } from "../api";
-import { runUpload, summarizeUploadResults } from "../uploadFeedback";
+import {
+  runUpload,
+  summarizeUploadResults,
+  isMaterialTooLarge,
+  MATERIAL_TOO_LARGE_TEXT,
+} from "../uploadFeedback";
 import type { AiEditMaterial } from "../types";
 import { userFacingError } from "../../../lib/userFacingError";
 
@@ -125,10 +130,16 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
       const files = Array.from(e.target.files || []);
       e.target.value = "";
       if (files.length === 0) return;
+      // F1：前置过滤超限文件（>500MB 不发送 HTTP 请求、不进 nginx、不创建上传任务）
+      const tooLarge: File[] = [];
+      const valid: File[] = [];
+      for (const f of files) (isMaterialTooLarge(f.size) ? tooLarge : valid).push(f);
+      if (tooLarge.length > 0) toast.error(MATERIAL_TOO_LARGE_TEXT);
+      if (valid.length === 0) return; // 全部超限：不进入上传态、零 HTTP 请求
       setTosUploading(true);
       setError(null);
       // 逐文件上传；timeout/network 只计 unknown（客户端超时 ≠ 服务端失败），不自动重试
-      const counts = await runUpload(files, (f) => uploadMaterialToTos(f as File));
+      const counts = await runUpload(valid, (f) => uploadMaterialToTos(f as File));
       setTosUploading(false);
       const fb = summarizeUploadResults(counts);
       if (fb.toastText) toast.success(fb.toastText);
