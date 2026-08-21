@@ -46,6 +46,31 @@ def _enable_real_send_test_gate(monkeypatch):
     monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", {"account-open-1"})
     monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", {"customer-open-1"})
     monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+    # P0.5-DOUYIN-GMP-AUTHORIZATION-LIFECYCLE：发送前可信定位需要账号记录
+    # （merchant_id + DY_MAIN_ACCOUNT_ID + account_open_id + bind_status=1）。SQLite 禁用态下
+    # 定位仍生效（授权健康写入跳过）；对齐 main_account_id 与账号表。
+    monkeypatch.setattr("app.config.DY_MAIN_ACCOUNT_ID", 123)
+    from app.models import DouyinAuthorizedAccount
+
+    db = TestSession()
+    try:
+        exists = (
+            db.query(DouyinAuthorizedAccount)
+            .filter_by(merchant_id="merchant-1", main_account_id=123, open_id="account-open-1")
+            .first()
+        )
+        if exists is None:
+            db.add(
+                DouyinAuthorizedAccount(
+                    merchant_id="merchant-1",
+                    main_account_id=123,
+                    open_id="account-open-1",
+                    bind_status=1,
+                )
+            )
+            db.commit()
+    finally:
+        db.close()
 
 
 def _insert_settings(

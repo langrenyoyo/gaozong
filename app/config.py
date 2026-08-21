@@ -291,6 +291,10 @@ KNOWLEDGE_TRAINING_TRUST_PROXY_HEADERS = (
 KNOWLEDGE_TRAINING_INTERNAL_TOKENS = os.getenv("KNOWLEDGE_TRAINING_INTERNAL_TOKENS", "").strip()
 
 # ---------- 抖音 AI 客服真实自动回复门禁 ----------
+# P0.5-DOUYIN-GMP-AUTHORIZATION-LIFECYCLE：REAUTH_REQUIRED 本地预阻断开关。
+# 默认 true（fail-closed）；false 仅关闭已有 REAUTH_REQUIRED 的本地预阻断（跳过预阻断直接调 GMP），
+# 发送后的事故分类、状态记录、脱敏与原有发送门禁仍然生效；不提供自动重试/补发。
+DOUYIN_GMP_AUTH_LOCAL_BLOCK_ENABLED = _env_bool("DOUYIN_GMP_AUTH_LOCAL_BLOCK_ENABLED", True)
 # 默认全部关闭；真实发送必须同时打开总开关和真实发送开关，并命中后端白名单。
 DOUYIN_AUTO_REPLY_ENABLED = _env_bool("DOUYIN_AUTO_REPLY_ENABLED", False)
 DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED = _env_bool("DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED", False)

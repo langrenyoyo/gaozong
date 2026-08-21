@@ -15,6 +15,14 @@ from sqlalchemy.orm import Session
 from app import config
 from app.auth.context import RequestContext
 from app.models import DouyinAuthorizedAccount, DouyinOAuthState
+from app.services.douyin_gmp_authorization_health import (
+    GMP_AUTH_STATUS_AUTHORIZED,
+    GMP_AUTH_STATUS_UNKNOWN,
+    GMP_AUTH_STATUS_WARNING,
+    confirm_reauthorized,
+    derive_gmp_warning,
+    gmp_authorization_health_enabled,
+)
 from app.services.douyin_openapi_client import (
     build_safe_openapi_error_detail,
     call_douyin_openapi as _shared_call_douyin_openapi,
@@ -690,6 +698,10 @@ def bind_authorized_account_by_open_id(
     row.raw_body_json = matched  # dict 写入 JSONB，禁止 json.dumps 回退
     row.last_synced_at = now
     row.updated_at = now
+    # P0.5（Decision C5）：精确重新授权确认——同一事务内原子递增 authorization_version +
+    # 恢复 AUTHORIZED + 更新 authorized_at + 清空 last_authorization_error_at。
+    # 普通同步（sync-bind-info）/ /auth-redirect 不更新授权健康字段。
+    confirm_reauthorized(db, account_id=row.id, now=now.astimezone(timezone.utc))
     db.commit()
 
     logger.info(
@@ -706,6 +718,9 @@ def bind_authorized_account_by_open_id(
         "account_name": row.account_name,
         "avatar_url": row.avatar_url,
         "updated_at": row.updated_at,
+        # P0.5：精确重新授权成功响应（固定两字段，不含 version/token/上游正文）
+        "gmp_authorization_status": GMP_AUTH_STATUS_AUTHORIZED,
+        "gmp_authorized_at": _rfc3339(row.authorized_at),
     }
 
 
@@ -722,6 +737,41 @@ def _persisted_account_item(row: DouyinAuthorizedAccount) -> dict[str, Any]:
     open_id = row.open_id
     display_name = row.account_name or f"抖音号 {open_id[-6:]}"
     account_id = int(hashlib.sha256(open_id.encode("utf-8")).hexdigest()[:8], 16)
+    # P0.5：GMP 授权健康字段（4 个固定返回；WARNING 动态派生）。
+    # 非 PG（开发 SQLite）禁用态：固定 UNKNOWN + 三时间 null（不伪造证据）。
+    if gmp_authorization_health_enabled():
+        base_status = row.authorization_status or GMP_AUTH_STATUS_AUTHORIZED
+        gmp_status = base_status
+        if base_status == GMP_AUTH_STATUS_AUTHORIZED and derive_gmp_warning(
+            base_status, row.authorized_at, datetime.now(timezone.utc)
+        ):
+            gmp_status = GMP_AUTH_STATUS_WARNING
+        return {
+            "id": account_id,
+            "account_id": open_id,
+            "douyin_account_id": account_id,
+            "account_open_id": open_id,
+            "open_id": open_id,
+            "account_name": display_name,
+            "name": display_name,
+            "nickname": display_name,
+            "avatar": row.avatar_url or "",
+            "avatar_url": row.avatar_url or "",
+            "status": "active",
+            "is_active": True,
+            "is_authorized": True,
+            "bind_status": row.bind_status,
+            "account_type": row.account_type,
+            "last_active_at": row.last_synced_at,
+            "authorized_at": row.bind_time or row.created_at,
+            "unread_count": 0,
+            "source": "persisted_bind_info",
+            "has_events": False,
+            "gmp_authorization_status": gmp_status,
+            "gmp_authorized_at": _rfc3339(row.authorized_at),
+            "gmp_last_success_at": _rfc3339(row.last_success_at),
+            "gmp_last_authorization_error_at": _rfc3339(row.last_authorization_error_at),
+        }
     return {
         "id": account_id,
         "account_id": open_id,
@@ -743,7 +793,20 @@ def _persisted_account_item(row: DouyinAuthorizedAccount) -> dict[str, Any]:
         "unread_count": 0,
         "source": "persisted_bind_info",
         "has_events": False,
+        "gmp_authorization_status": GMP_AUTH_STATUS_UNKNOWN,
+        "gmp_authorized_at": None,
+        "gmp_last_success_at": None,
+        "gmp_last_authorization_error_at": None,
     }
+
+
+def _rfc3339(value: datetime | None) -> str | None:
+    """RFC3339 UTC 序列化（末尾 Z）；None → null。"""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _int_or_none(value: Any) -> int | None:

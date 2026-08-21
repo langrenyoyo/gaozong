@@ -51,6 +51,10 @@ from app.models import (
     WechatTask,
 )
 from app.services.conversation_autopilot_state_service import evaluate_manual_takeover_gate
+from app.services.douyin_gmp_authorization_health import (
+    GMP_ACCOUNT_SCOPE_MISMATCH_CODE,
+    GMP_REAUTH_ERROR_CODE,
+)
 from app.services.douyin_private_message_send_service import _send_private_message_with_context
 from app.services.douyin_workbench_conversation_service import (
     get_latest_private_message_state,
@@ -910,6 +914,13 @@ def _error_code_from_detail(detail: Any) -> str:
     return str(detail or "")
 
 
+def _code_from_detail(detail: Any) -> str:
+    """从 HTTPException.detail 提取顶层 code（P0.5 授权健康错误合同三键之一）。"""
+    if isinstance(detail, dict):
+        return str(detail.get("code") or "")
+    return ""
+
+
 def _send_and_classify(
     db: Session,
     run_id: int,
@@ -940,6 +951,7 @@ def _send_and_classify(
     try:
         send_result = _send_private_message_with_context(
             db,
+            merchant_id=run.merchant_id or "",
             content=content,
             send_context=send_context,
             manual_confirmed=False,
@@ -952,6 +964,10 @@ def _send_and_classify(
         return {"status": "sent", "failure_stage": None, "send_id": upstream_msg_id}
     except HTTPException as exc:
         error_code = _error_code_from_detail(exc.detail)
+        code = _code_from_detail(exc.detail)
+        # P0.5：授权健康错误码 → 终态 failed（不重试、不进 send_unknown）。
+        if code in (GMP_REAUTH_ERROR_CODE, GMP_ACCOUNT_SCOPE_MISMATCH_CODE):
+            return {"status": "failed", "failure_stage": code.lower(), "send_record_id": None}
         if error_code == "upstream_business_error":
             return {"status": "failed", "failure_stage": "send_upstream_business_error", "send_record_id": None}
         return {"status": "send_unknown", "failure_stage": f"send_unknown:{error_code}", "send_record_id": None}

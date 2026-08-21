@@ -767,6 +767,14 @@ function authorizationStatusText(value?: string | null): string {
   return value || "未知";
 }
 
+/** P0.5：识别 GMP 授权失效 409 错误（code=DOUYIN_GMP_REAUTH_REQUIRED + action=reauthorize）。 */
+function isReauthRequiredError(err: unknown): boolean {
+  const detail = (err as {
+    response?: { data?: { detail?: { code?: string; action?: string } } };
+  })?.response?.data?.detail;
+  return Boolean(detail && detail.code === "DOUYIN_GMP_REAUTH_REQUIRED" && detail.action === "reauthorize");
+}
+
 function hasActiveAgentBinding(account: DouyinAccountItem | null): boolean {
   return Boolean(
     account?.bound_agent_id &&
@@ -2429,6 +2437,10 @@ export default function DouyinAiCsWorkbenchPage() {
     } catch (err) {
       const message = userFacingError(err, "发送失败，请稍后重试");
       setSendError(message);
+      // P0.5：GMP 授权失效 409（DOUYIN_GMP_REAUTH_REQUIRED / action=reauthorize）→ 展示固定文案并打开重新授权
+      if (isReauthRequiredError(err)) {
+        void openAuthModal();
+      }
     } finally {
       setSendingMessage(false);
     }
@@ -2760,6 +2772,15 @@ export default function DouyinAiCsWorkbenchPage() {
                     <span className="mt-1 inline-flex max-w-full rounded bg-blue-50 px-1.5 py-0.5 text-[11px] font-semibold text-blue-700">
                       {authorizationStatusText(account.authorization_status)}
                     </span>
+                    {account.gmp_authorization_status === "REAUTH_REQUIRED" ? (
+                      <span className="mt-1 ml-1 inline-flex max-w-full rounded bg-red-50 px-1.5 py-0.5 text-[11px] font-semibold text-red-700">
+                        授权已失效
+                      </span>
+                    ) : account.gmp_authorization_status === "WARNING" ? (
+                      <span className="mt-1 ml-1 inline-flex max-w-full rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-700">
+                        授权即将到期
+                      </span>
+                    ) : null}
                     <span className="mt-1 block truncate text-[11px] text-slate-500">
                       {accountIdentityText(account)}
                     </span>
@@ -3155,6 +3176,31 @@ export default function DouyinAiCsWorkbenchPage() {
             </div>
 
             <div className="min-h-0 overflow-auto border-t border-[#edf1f6] bg-white p-5">
+              {/* P0.5：当前账号 GMP 授权健康横幅（WARNING / REAUTH_REQUIRED，复用现有授权弹窗） */}
+              {selectedAccount &&
+              (selectedAccount.gmp_authorization_status === "REAUTH_REQUIRED" ||
+                selectedAccount.gmp_authorization_status === "WARNING") ? (
+                <div
+                  className={`mb-3 flex flex-wrap items-center gap-2 rounded-md px-3 py-2 text-[12px] font-medium ${
+                    selectedAccount.gmp_authorization_status === "REAUTH_REQUIRED"
+                      ? "bg-red-50 text-red-700"
+                      : "bg-amber-50 text-amber-700"
+                  }`}
+                >
+                  <span>
+                    {selectedAccount.gmp_authorization_status === "REAUTH_REQUIRED"
+                      ? "该抖音账号授权已失效，请重新授权后再发送。"
+                      : "该抖音账号授权可能即将到期，建议尽快重新授权，避免消息发送中断。"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void openAuthModal()}
+                    className="rounded bg-white px-2 py-0.5 text-[11px] font-semibold text-blue-700 shadow-sm hover:bg-blue-50"
+                  >
+                    去重新授权
+                  </button>
+                </div>
+              ) : null}
               {/* ponytail: 窄桌面（<1500px，第三列宽度受限）发送区标题与附件操作上下堆叠，避免逐字换行；宽桌面恢复左右布局 */}
               <div className="mb-3 flex flex-col items-start gap-3 min-[1500px]:flex-row min-[1500px]:items-center min-[1500px]:justify-between">
                 <div className="flex items-center gap-2">

@@ -1345,6 +1345,8 @@ def test_real_send_mode_all_gates_pass_calls_fake_sender_once(monkeypatch):
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
     _enable_real_send_config(monkeypatch)
+    # P0.5：发送前可信定位按 config.DY_MAIN_ACCOUNT_ID 匹配账号（_insert_account_agent_binding 用 123）
+    monkeypatch.setattr("app.config.DY_MAIN_ACCOUNT_ID", 123)
     event_id = _insert_event(event_key="event-real-send-allowed", server_message_id="server-msg-allowed")
     _insert_account_agent_binding()
     _insert_autoreply_settings(send_enabled=True, dry_run_enabled=False)

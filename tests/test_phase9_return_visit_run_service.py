@@ -59,6 +59,8 @@ def _patch_env(monkeypatch):
     """默认 config 双开关开 + SessionLocal 替身 + 网络哨兵（未打桩即失败）。"""
     monkeypatch.setattr(config, "DOUYIN_AUTO_REPLY_ENABLED", True)
     monkeypatch.setattr(config, "DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED", True)
+    # P0.5：发送前可信定位按 config.DY_MAIN_ACCOUNT_ID 匹配账号 main_account_id（测试账号=1）
+    monkeypatch.setattr(config, "DY_MAIN_ACCOUNT_ID", 1)
     monkeypatch.setattr("app.services.return_visit_run_service.SessionLocal", lambda: TestSession())
 
     def _raise(*args, **kwargs):

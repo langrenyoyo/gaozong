@@ -15,6 +15,19 @@ from app import config
 from app.models import DouyinAuthorizedAccount, DouyinPrivateMessageSend, DouyinWebhookEvent
 from app.services.ai_auto_reply_content_sanitizer import sanitize_ai_reply_content
 from app.services.conversation_autopilot_state_service import mark_manual_takeover
+from app.services.douyin_gmp_authorization_health import (
+    GMP_ACCOUNT_SCOPE_MISMATCH_CODE,
+    GMP_ACCOUNT_SCOPE_MISMATCH_MESSAGE,
+    GMP_AUTH_STATUS_REAUTH_REQUIRED,
+    GMP_REAUTH_ERROR_ACTION,
+    GMP_REAUTH_ERROR_CODE,
+    GMP_REAUTH_ERROR_MESSAGE,
+    GMP_SEND_MSG_PATH,
+    classify_gmp_reauth_required,
+    gmp_authorization_health_enabled,
+    mark_reauth_required,
+    record_send_success,
+)
 from app.services.douyin_merchant_isolation import require_douyin_account_for_merchant
 from app.services.douyin_openapi_client import call_douyin_openapi
 from app.services.douyin_workbench_conversation_service import get_send_msg_context
@@ -87,6 +100,7 @@ def send_manual_private_message(
 
     result = _send_private_message_with_context(
         db,
+        merchant_id=merchant_id or "",
         content=content_text,
         send_context=context,
         manual_confirmed=True,
@@ -94,13 +108,14 @@ def send_manual_private_message(
         send_source="manual",
         operator_id=operator_id,
     )
-    _mark_manual_takeover_after_send(db, context)
+    _mark_manual_takeover_after_send(db, context, merchant_id=merchant_id)
     return result
 
 
 def _send_private_message_with_context(
     db: Session,
     *,
+    merchant_id: str,
     content: str,
     send_context: dict[str, Any],
     manual_confirmed: bool,
@@ -111,7 +126,12 @@ def _send_private_message_with_context(
     auto_reply_run_id: int | None = None,
     return_visit_run_id: int | None = None,
 ) -> dict[str, Any]:
-    """基于已校验的 send_msg context 发送私信，并写入统一发送流水。"""
+    """基于已校验的 send_msg context 发送私信，并写入统一发送流水。
+
+    P0.5-DOUYIN-GMP-AUTHORIZATION-LIFECYCLE：merchant_id 为必填可信来源
+    （RequestContext / 已持久化 run/task 字段），按 merchant_id + main_account_id +
+    account_open_id + bind_status=1 定位账号；发送后不再反查商户。
+    """
     content_check = sanitize_ai_reply_content(content)
     if content_check.format_invalid:
         raise HTTPException(status_code=400, detail="llm_reply_json_parse_failed")
@@ -124,6 +144,53 @@ def _send_private_message_with_context(
         raise HTTPException(status_code=400, detail="send_msg context msg_id is older than 24 hours")
 
     context = send_context
+    # P0.5：可信账号定位（merchant_id + DY_MAIN_ACCOUNT_ID + account_open_id + bind_status=1）。
+    # 定位失败：不建流水、不更新账号、不调 GMP；禁止按 account_open_id 跨商户兜底。
+    send_account = (
+        db.query(DouyinAuthorizedAccount)
+        .filter(
+            DouyinAuthorizedAccount.merchant_id == merchant_id,
+            DouyinAuthorizedAccount.main_account_id == config.DY_MAIN_ACCOUNT_ID,
+            DouyinAuthorizedAccount.open_id == _optional_str(context.get("account_open_id")),
+            DouyinAuthorizedAccount.bind_status == 1,
+        )
+        .first()
+    )
+    if send_account is None:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": GMP_ACCOUNT_SCOPE_MISMATCH_CODE,
+                "message": GMP_ACCOUNT_SCOPE_MISMATCH_MESSAGE,
+            },
+        )
+    # P0.5：非 PG（开发 SQLite）禁用授权健康——跳过预阻断与健康写入，其余发送门禁不变。
+    health_enabled = gmp_authorization_health_enabled()
+    attempt_version = int(send_account.authorization_version or 0) if health_enabled else 0
+    auth_status = send_account.authorization_status if health_enabled else None
+
+    # 本地预阻断：REAUTH_REQUIRED 且开关为 true → 写 failed 流水 + 固定 409 合同，不调用 GMP。
+    if health_enabled and config.DOUYIN_GMP_AUTH_LOCAL_BLOCK_ENABLED and auth_status == GMP_AUTH_STATUS_REAUTH_REQUIRED:
+        _insert_blocked_send_record(
+            db,
+            context=context,
+            manual_confirmed=manual_confirmed,
+            auto_send=auto_send,
+            send_source=send_source,
+            operator_id=operator_id,
+            decision_log_id=decision_log_id,
+            auto_reply_run_id=auto_reply_run_id,
+            return_visit_run_id=return_visit_run_id,
+            content_text=content_text,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": GMP_REAUTH_ERROR_CODE,
+                "message": GMP_REAUTH_ERROR_MESSAGE,
+                "action": GMP_REAUTH_ERROR_ACTION,
+            },
+        )
     # send_source 固定白名单字典映射；未知 send_source 拒绝发送（不再默认 manual，防误判来源）。
     forbidden_source = _FORBIDDEN_SOURCE_BY_SEND_SOURCE.get(send_source)
     if forbidden_source is None:
@@ -187,8 +254,32 @@ def _send_private_message_with_context(
     db.flush()
 
     try:
-        result = call_douyin_openapi("/send_msg", request_payload)
+        result = call_douyin_openapi(GMP_SEND_MSG_PATH, request_payload)
     except HTTPException as exc:
+        # P0.5：事故精确指纹命中 → 按授权代际条件标记失效（rowcount=0 放弃覆盖新状态），
+        # 流水写 failed + 固定安全文案 + response_body_json=NULL，抛 409 固定三键合同。
+        if health_enabled and classify_gmp_reauth_required(GMP_SEND_MSG_PATH, exc.detail):
+            mark_reauth_required(
+                db,
+                account_id=send_account.id,
+                attempt_version=attempt_version,
+                now=datetime.now(timezone.utc),
+            )
+            record.status = "failed"
+            record.error_code = GMP_REAUTH_ERROR_CODE
+            record.error_message = GMP_REAUTH_ERROR_MESSAGE
+            record.response_body_json = None
+            record.updated_at = datetime.now()
+            db.commit()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": GMP_REAUTH_ERROR_CODE,
+                    "message": GMP_REAUTH_ERROR_MESSAGE,
+                    "action": GMP_REAUTH_ERROR_ACTION,
+                },
+            )
+        # 未命中指纹 → 维持现有 upstream_business_error 行为不变，不更新授权状态。
         record.status = "failed"
         record.error_code = _error_code(exc.detail)
         record.error_message = _error_message(exc.detail)
@@ -201,6 +292,9 @@ def _send_private_message_with_context(
     data = upstream_payload.get("data") if isinstance(upstream_payload.get("data"), dict) else {}
     upstream_msg_id = _optional_str(data.get("msg_id") or data.get("server_message_id"))
 
+    # P0.5：成功发送单调更新（last_success_at 单调取大；仅 UNKNOWN→AUTHORIZED，永不走 REAUTH→AUTHORIZED）。
+    if health_enabled:
+        record_send_success(db, account_id=send_account.id)
     record.status = "sent"
     record.response_body_json = json.dumps(upstream_payload, ensure_ascii=False, separators=(",", ":"))
     record.upstream_msg_id = upstream_msg_id
@@ -219,6 +313,50 @@ def _send_private_message_with_context(
         "auto_send": bool(auto_send),
         "manual_confirmed": bool(manual_confirmed),
     }
+
+
+def _insert_blocked_send_record(
+    db: Session,
+    *,
+    context: dict[str, Any],
+    manual_confirmed: bool,
+    auto_send: bool,
+    send_source: str,
+    operator_id: str | None,
+    decision_log_id: int | None,
+    auto_reply_run_id: int | None,
+    return_visit_run_id: int | None,
+    content_text: str,
+) -> None:
+    """REAUTH_REQUIRED 本地预阻断流水（冻结合同）：status=failed + error_code +
+    error_message 固定安全文案 + response_body_json=NULL；不调用 GMP、不重试。"""
+    send_scene = _default_scene(context)
+    record = DouyinPrivateMessageSend(
+        main_account_id=config.DY_MAIN_ACCOUNT_ID,
+        conversation_short_id=context["conversation_short_id"],
+        server_message_id=context["server_message_id"],
+        from_user_id=context["account_open_id"],
+        to_user_id=context["customer_open_id"],
+        customer_open_id=context["customer_open_id"],
+        account_open_id=context["account_open_id"],
+        scene=send_scene,
+        content=content_text,
+        status="failed",
+        error_code=GMP_REAUTH_ERROR_CODE,
+        error_message=GMP_REAUTH_ERROR_MESSAGE,
+        response_body_json=None,
+        manual_confirmed=1 if manual_confirmed else 0,
+        auto_send=1 if auto_send else 0,
+        decision_log_id=decision_log_id,
+        auto_reply_run_id=auto_reply_run_id,
+        return_visit_run_id=return_visit_run_id,
+        send_source=send_source,
+        operator_id=operator_id,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    db.add(record)
+    db.commit()
 
 
 def _default_scene(context: dict[str, Any]) -> str:
@@ -255,7 +393,7 @@ def _optional_str(value: Any) -> str | None:
     return text if text else None
 
 
-def _mark_manual_takeover_after_send(db: Session, context: dict[str, Any]) -> None:
+def _mark_manual_takeover_after_send(db: Session, context: dict[str, Any], *, merchant_id: str | None) -> None:
     account_open_id = _optional_str(context.get("account_open_id"))
     conversation_short_id = _optional_str(context.get("conversation_short_id"))
     customer_open_id = _optional_str(context.get("customer_open_id"))
@@ -267,25 +405,14 @@ def _mark_manual_takeover_after_send(db: Session, context: dict[str, Any]) -> No
         )
         return
 
-    merchant_id = _resolve_merchant_id_for_account(db, account_open_id) or "unknown_merchant"
+    # P0.5：merchant_id 由调用方可信传入（RequestContext），不再按 account_open_id 发送后反查商户。
     mark_manual_takeover(
         db,
-        merchant_id=merchant_id,
+        merchant_id=merchant_id or "unknown_merchant",
         account_open_id=account_open_id,
         conversation_short_id=conversation_short_id,
         customer_open_id=customer_open_id,
     )
-
-
-def _resolve_merchant_id_for_account(db: Session, account_open_id: str) -> str | None:
-    account = (
-        db.query(DouyinAuthorizedAccount)
-        .filter(DouyinAuthorizedAccount.open_id == account_open_id)
-        .filter(DouyinAuthorizedAccount.bind_status == 1)
-        .order_by(DouyinAuthorizedAccount.id.desc())
-        .first()
-    )
-    return _optional_str(account.merchant_id) if account is not None else None
 
 
 def _safe_detail(detail: Any) -> dict[str, Any]:

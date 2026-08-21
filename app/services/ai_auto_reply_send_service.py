@@ -27,6 +27,10 @@ from app.services.conversation_autopilot_state_service import (
 )
 from app.services.douyin_autoreply_settings_service import get_account_autoreply_settings
 from app.services.douyin_autoreply_gate_service import evaluate_real_send_gates
+from app.services.douyin_gmp_authorization_health import (
+    GMP_ACCOUNT_SCOPE_MISMATCH_CODE,
+    GMP_REAUTH_ERROR_CODE,
+)
 from app.services.douyin_private_message_send_service import (
     _is_context_expired,
     _send_private_message_with_context,
@@ -329,6 +333,7 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
     try:
         send_result = _send_private_message_with_context(
             db,
+            merchant_id=run.merchant_id or "",
             content=content,
             send_context=send_context,
             manual_confirmed=False,
@@ -341,7 +346,15 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
         send_timing["douyin_api_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
     except HTTPException as exc:
         failure_stage = _classify_send_failure(exc)
-        terminal_status = "failed" if failure_stage == "upstream_business_error" else "send_unknown"
+        terminal_status = (
+            "failed"
+            if failure_stage in (
+                "upstream_business_error",
+                "douyin_gmp_reauth_required",
+                "douyin_account_scope_mismatch",
+            )
+            else "send_unknown"
+        )
         written = _terminal(
             db, run, expected_status="send_authorized", status=terminal_status,
             error_message=_safe_error(exc.detail), last_failure_stage=failure_stage,
@@ -538,10 +551,17 @@ def _safe_error(detail: Any) -> str:
 def _classify_send_failure(exc: HTTPException) -> str:
     """分类 send_msg HTTP 异常：upstream_business_error → failed；其余 → send_unknown。
 
+    P0.5-DOUYIN-GMP-AUTHORIZATION-LIFECYCLE：识别两个授权健康错误码 → 终态 failed
+    （douyin_gmp_reauth_required / douyin_account_scope_mismatch），不进入 send_unknown。
     优先识别稳定的 error_code=upstream_business_error；不能维护不完整的业务码白名单。
     """
     detail = exc.detail
     if isinstance(detail, dict):
+        code = str(detail.get("code") or "").strip()
+        if code == GMP_REAUTH_ERROR_CODE:
+            return "douyin_gmp_reauth_required"
+        if code == GMP_ACCOUNT_SCOPE_MISMATCH_CODE:
+            return "douyin_account_scope_mismatch"
         error_code = str(detail.get("error_code") or "").strip()
         if error_code == "upstream_business_error":
             return "upstream_business_error"

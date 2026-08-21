@@ -177,6 +177,23 @@ def create_app() -> FastAPI:
         # 绝不让 mock 鉴权上线；非 production 不拦截。
         config.validate_production_auth_config()
 
+        # P0.5-DOUYIN-GMP-AUTHORIZATION-LIFECYCLE（C3）：GMP 授权健康 schema 启动校验。
+        # PG 方言缺任一列/约束 → RuntimeError 拒启动（fail-closed，同 G0 先例）；
+        # 非 PG（开发 SQLite）→ 能力显式禁用 + ERROR 级启动日志，不得静默退回内存状态。
+        from app.services.douyin_gmp_authorization_health import (
+            validate_gmp_authorization_schema,
+        )
+
+        _gmp_runtime = get_database_runtime()
+        if _gmp_runtime.backend == "postgresql":
+            validate_gmp_authorization_schema(engine)
+        else:
+            logger.error(
+                "gmp_authorization stage=capability_disabled backend=%s"
+                "（非 PG 开发态禁用 GMP 授权健康写入，账号列表固定 UNKNOWN）",
+                _gmp_runtime.backend,
+            )
+
         if config.KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED:
             database_runtime = get_database_runtime()
             if database_runtime.backend == "postgresql":

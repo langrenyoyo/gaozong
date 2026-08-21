@@ -402,6 +402,20 @@ class DouyinAuthorizedAccount(Base):
     source_created_at = Column(DateTime(timezone=True), comment="上游 created_at，aware datetime 写入")
     last_synced_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     raw_body_json = Column(JSON, comment="Raw list_bind_info item，dict 写入")
+    # P0.5-DOUYIN-GMP-AUTHORIZATION-LIFECYCLE：GMP 授权健康投影（与 bind_status 分离）。
+    # 状态机：UNKNOWN（无足够健康证据，含存量）/ AUTHORIZED（成功发送或精确授权证据）/
+    # REAUTH_REQUIRED（当前授权代际确认失效，本地预阻断）；WARNING 为动态派生（不持久化）。
+    authorization_status = Column(
+        String(32), nullable=False, default="UNKNOWN", server_default="UNKNOWN",
+        comment="授权健康状态 UNKNOWN/AUTHORIZED/REAUTH_REQUIRED",
+    )
+    authorization_version = Column(
+        BigInteger, nullable=False, default=0, server_default="0",
+        comment="每次精确授权确认原子 +1，用于发送结果与重新授权并发保护",
+    )
+    authorized_at = Column(DateTime(timezone=True), comment="最近一次精确授权确认时间")
+    last_success_at = Column(DateTime(timezone=True), comment="最近一次成功 send_msg 时间")
+    last_authorization_error_at = Column(DateTime(timezone=True), comment="当前失效证据时间；重新授权后清空")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 

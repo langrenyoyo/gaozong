@@ -26,6 +26,7 @@ import time as _time
 from datetime import datetime, timedelta
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
@@ -38,6 +39,10 @@ from app.models import (
     DouyinPrivateMessageSend,
 )
 from app.services.conversation_autopilot_state_service import evaluate_manual_takeover_gate
+from app.services.douyin_gmp_authorization_health import (
+    GMP_ACCOUNT_SCOPE_MISMATCH_CODE,
+    GMP_REAUTH_ERROR_CODE,
+)
 from app.services.douyin_workbench_conversation_service import get_latest_private_message_state, get_send_msg_context
 from app.services.douyin_private_message_send_service import _send_private_message_with_context
 
@@ -242,6 +247,7 @@ def _process_one(db: Session, task: ContactInvalidFollowupTask) -> None:
 
         send_result = _send_private_message_with_context(
             db,
+            merchant_id=task.merchant_id or "",
             content=text,
             send_context=send_context,
             manual_confirmed=False,
@@ -284,6 +290,19 @@ def _process_one(db: Session, task: ContactInvalidFollowupTask) -> None:
                 task.id, task.last_error[:100],
             )
     except Exception as exc:
+        # P0.5：授权健康错误（REAUTH_REQUIRED 本地阻断 / 账号归属失败）→ 任务终态 failed，
+        # 不进 60 秒重试（重复调用无意义且不解决授权问题）；其余异常维持既有 60 秒重试。
+        if isinstance(exc, HTTPException) and isinstance(exc.detail, dict):
+            code = str(exc.detail.get("code") or "")
+            if code in (GMP_REAUTH_ERROR_CODE, GMP_ACCOUNT_SCOPE_MISMATCH_CODE):
+                task.status = "failed"
+                task.last_error = code
+                task.updated_at = datetime.now()
+                logger.warning(
+                    "contact_invalid_followup_failed task_id=%s code=%s（授权健康终态，不进 60s 重试）",
+                    task.id, code,
+                )
+                return
         task.status = "retry_wait"
         task.scheduled_at = datetime.now() + timedelta(seconds=60)
         task.last_error = f"{type(exc).__name__}: {str(exc)[:200]}"

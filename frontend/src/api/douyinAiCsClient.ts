@@ -42,6 +42,11 @@ export interface DouyinAccountItem {
   bound_agent_name?: string | null;
   bound_agent_status?: string | null;
   binding_status?: string | null;
+  // P0.5-DOUYIN-GMP-AUTHORIZATION-LIFECYCLE：GMP 授权健康投影（固定返回）
+  gmp_authorization_status?: string;
+  gmp_authorized_at?: string | null;
+  gmp_last_success_at?: string | null;
+  gmp_last_authorization_error_at?: string | null;
 }
 
 export interface DouyinAccountListResponse {
