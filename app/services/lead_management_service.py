@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import Text, cast, or_
 from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
@@ -384,7 +384,9 @@ def _lead_query(db: Session, query: LeadListQuery):
                 DouyinLead.customer_contact.like(like),
                 DouyinLead.content.like(like),
                 DouyinLead.source_id.like(like),
-                DouyinLead.raw_data.like(like),
+                # P0.5-LEADS-JSONB-SEARCH-FIX-1：JSONB 列须 cast 为 Text 再 LIKE（对齐 webhook raw_body 既有模式），
+                # 避免 _JSONStringJSONB 在 PG 方言把 LIKE 模式参数当 JSON 解析导致 JSONDecodeError。
+                cast(DouyinLead.raw_data, Text).like(like),
             )
         )
     if query.source:

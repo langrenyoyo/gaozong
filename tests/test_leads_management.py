@@ -148,6 +148,38 @@ def test_list_leads_supports_keyword_source_status_and_staff_filters():
     assert [item["id"] for item in staff_filtered.json()] == [ids["lead_ids"][1]]
 
 
+def test_list_leads_keyword_matches_raw_data_text_sqlite():
+    """P0.5-LEADS-JSONB-SEARCH-FIX-1：keyword 可命中 raw_data 文本（SQLite 与 PG 行为一致）。"""
+    db = TestSession()
+    try:
+        db.add(
+            DouyinLead(
+                source="douyin",
+                merchant_id="merchant-a",
+                account_open_id="acc-raw",
+                conversation_short_id="conv-raw",
+                source_id="src-raw",
+                customer_name="普通客户",
+                content="普通内容",
+                raw_data=json.dumps(
+                    {"raw_message_text": "特殊词XQZ在原始数据中", "contact_extract": {"status": "matched"}},
+                    ensure_ascii=False,
+                ),
+                status="pending",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    client = _client()
+    response = client.get("/leads", params={"keyword": "特殊词XQZ", "page": 1, "page_size": 10})
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["id"] for item in data] == [1]
+    assert data[0]["customer_name"] == "普通客户"
+
+
 def test_list_leads_can_return_paginated_total_without_breaking_array_response():
     ids = _seed_staff_and_leads()
     client = _client()
